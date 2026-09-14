@@ -47,12 +47,17 @@ class TestConnection:
 
 
 class TestWriteProfile:
-    def test_writes_managed_profile(self, tmp_path, monkeypatch):
+    def test_writes_managed_profile_without_global_header(self, tmp_path, monkeypatch):
         monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
         token_file = write_token_file("my-bucket", "token-123")
         connection = make_connection(name="My Bucket")
 
         profile = write_profile(connection, token_file)
+
+        raw = (tmp_path / "aws" / "config").read_text()
+        assert raw.count("managed by cytario-cli") == 1  # comment travels with the section
+        # and it sits directly above the section it annotates, never as a stray banner
+        assert "# managed by cytario-cli\n[profile cytario-my-bucket]" in raw
 
         parser = configparser.RawConfigParser()
         parser.read(tmp_path / "aws" / "config")
@@ -61,6 +66,40 @@ class TestWriteProfile:
         assert section["web_identity_token_file"] == str(token_file)
         assert section["region"] == "eu-central-1"
         assert "endpoint_url" not in section  # AWS S3 needs no override
+
+    def test_preserves_foreign_profiles_and_comments(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "aws" / "config"
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", config_path)
+        config_path.parent.mkdir(parents=True)
+        user_content = "# my personal note\n[profile personal]\nregion = us-west-2\n\n"
+        config_path.write_text(user_content)
+
+        write_profile(make_connection(name="My Bucket"), Path("/tmp/t"))
+
+        raw = config_path.read_text()
+        assert raw.startswith(user_content)  # user content untouched, in order
+        assert "[profile personal]" in raw
+        assert "[profile cytario-my-bucket]" in raw
+
+    def test_readds_profile_after_manual_removal(self, tmp_path, monkeypatch):
+        """Deleting the managed block from .aws/config must not break setup."""
+        config_path = tmp_path / "aws" / "config"
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", config_path)
+
+        write_profile(make_connection(), Path("/tmp/a"))
+        assert "[profile cytario-my-bucket]" in config_path.read_text()
+
+        # the user deletes the block (comment + section) by hand
+        config_path.write_text("[profile personal]\nregion = us-west-2\n")
+
+        profile = write_profile(make_connection(), Path("/tmp/b"))
+
+        raw = config_path.read_text()
+        assert "[profile cytario-my-bucket]" in raw
+        assert "[profile personal]" in raw
+        parser = configparser.RawConfigParser()
+        parser.read(config_path)
+        assert parser[f"profile {profile}"]["web_identity_token_file"] == "/tmp/b"
 
     def test_s3_compatible_gets_endpoint_url(self, tmp_path, monkeypatch):
         monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
@@ -77,6 +116,9 @@ class TestWriteProfile:
         monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
         write_profile(make_connection(), Path("/tmp/a"))
         write_profile(make_connection(role_arn="arn:aws:iam::123:role/new"), Path("/tmp/b"))
+
+        raw = (tmp_path / "aws" / "config").read_text()
+        assert raw.count("[profile cytario-my-bucket]") == 1  # replaced in place, not duplicated
 
         parser = configparser.RawConfigParser()
         parser.read(tmp_path / "aws" / "config")

@@ -255,13 +255,25 @@ def connections_setup(
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
 
+    if not connections:
+        typer.secho("No connections are visible to you on this host.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
     usable = [connection for connection in connections if connection.role_arn]
+    if not usable:
+        typer.secho(
+            "Connections are visible, but none has a grant applicable to you — "
+            "ask an organization admin for access (or check `cytario connections list`).",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
     if name:
         usable = [connection for connection in usable if connection.name == name]
         if not usable:
             typer.secho(f"No connection named {name!r} with an applicable grant.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
-    elif not setup_all and usable:
+    elif not setup_all:
         typer.echo("No connection selected; use --all or pass a connection name.")
         raise typer.Exit(code=2)
 
@@ -271,8 +283,6 @@ def connections_setup(
         typer.secho(
             f"{connection.name}: profile {profile!r} ready (token {token_file}).", fg=typer.colors.GREEN
         )
-    if not usable:
-        typer.echo("Nothing to set up — no connection has an applicable grant.")
 
 
 @app.callback()
