@@ -1,0 +1,139 @@
+name: Release
+
+# Cuts a new release on every push to `main` that warrants one, using
+# python-semantic-release driven by Conventional Commits — WITHOUT creating a
+# new commit on `main` (org policy forbids that). Instead:
+#
+#   `semantic-release version --no-commit --no-changelog` (single command) does
+#   everything:
+#     * stamps the next version into pyproject.toml /
+#       src/cytario_cli/__init__.py (in the working tree, uncommitted),
+#     * runs `uv build` (the build_command) → sdist + wheel,
+#     * creates the tag `v<x>` locally at HEAD and pushes it to the remote via
+#       git. With `--no-commit` there is no release commit, so PSR pushes ONLY
+#       the tag refspec — nothing is pushed to refs/heads/main. A real git tag
+#       ends up in the repo (discoverable via `git tag` / `git describe`),
+#     * creates the GitHub Release for that tag and uploads the built dists as
+#       release assets.
+#
+#   A separate `publish` job then uploads the same dists to PyPI via trusted
+#   publishing (OIDC) — no API token is stored in the repo. The first release
+#   needs the project registered as a PyPI trusted publisher (CONTRIBUTING.md).
+#
+# Release notes are generated from the Conventional Commits history and
+# attached to the GitHub Release — no CHANGELOG.md file is maintained on the
+# branch.
+#
+# PSR is run via `uv run` (not the wrapper action) so the `uv build`
+# build_command runs on the host where `uv` is on PATH; the wrapper action
+# runs PSR in a Docker container that does not contain `uv`.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Semantic release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-release-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # push tag + create GitHub release
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # PSR injects the GH_TOKEN into the git remote URL itself for the tag
+          # push, so we don't need checkout to persist credentials.
+          persist-credentials: false
+
+      # Pull tags created by previous runs so PSR can see the last released
+      # version (tags are pushed via git, not just GitHub Releases).
+      - name: Fetch tags
+        run: git fetch --tags --force origin
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      # `version --no-commit --no-changelog` stamps the version, builds, creates
+      # + pushes the tag (only the tag — no commit, no branch push), and creates
+      # the GitHub Release with the built dists as assets. PSR writes
+      # `released`/`version`/`tag` to $GITHUB_OUTPUT automatically.
+      - name: Semantic Release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run semantic-release version --no-commit --no-changelog
+
+      - name: Upload distribution artifacts
+        if: steps.release.outputs.released == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.release.outputs.released }}" == "true" ]; then
+            echo "- **Released**: ✓ ${{ steps.release.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **GitHub**: https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Released**: ✗ No changes warranting a release" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cytario-cli/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          print-hash: true
+          verbose: true
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## PyPI Publish Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ needs.release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PyPI**: https://pypi.org/project/cytario-cli/${{ needs.release.outputs.version }}/" >> $GITHUB_STEP_SUMMARY

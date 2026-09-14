@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TZ: "Europe/Berlin"
+
+jobs:
+  lint-and-test:
+    name: Lint, format check & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Check formatting
+        id: format_step
+        run: uv run ruff format --check
+
+      - name: Run linter
+        id: lint_step
+        run: uv run ruff check
+
+      - name: Run tests
+        id: test_step
+        run: uv run pytest
+
+      - name: Build package
+        id: build_step
+        run: uv build
+
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Ruff format: ${{ steps.format_step.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Ruff check:  ${{ steps.lint_step.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Pytest:       ${{ steps.test_step.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- uv build:     ${{ steps.build_step.outcome }}" >> $GITHUB_STEP_SUMMARY
