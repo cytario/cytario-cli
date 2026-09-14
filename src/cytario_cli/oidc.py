@@ -14,6 +14,7 @@ are derived.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import secrets
@@ -248,8 +249,20 @@ def login_flow(discovery: Discovery) -> dict[str, str]:
     return token_response.json()
 
 
+class RefreshGrantError(OidcError):
+    """The stored refresh grant was revoked, expired, or already rotated."""
+
+
+HTTP_BAD_REQUEST = 400
+
+
 def refresh_token(discovery_token_endpoint: str, refresh_token_value: str) -> dict[str, str]:
-    """Redeem a refresh grant; return the token response."""
+    """Redeem a refresh grant; return the token response.
+
+    Raises RefreshGrantError when the grant was revoked, expired, or
+    already used under rotation — the caller must treat this as signed-out
+    rather than a transient error.
+    """
     response = httpx.post(
         discovery_token_endpoint,
         data={
@@ -260,6 +273,12 @@ def refresh_token(discovery_token_endpoint: str, refresh_token_value: str) -> di
         timeout=15,
     )
     if response.status_code != HTTP_OK:
+        if response.status_code == HTTP_BAD_REQUEST:
+            with contextlib.suppress(ValueError):
+                if response.json().get("error") == "invalid_grant":
+                    raise RefreshGrantError(
+                        "The saved sign-in is no longer valid (revoked, expired, or rotated)."
+                    )
         raise OidcError(f"The token refresh failed ({response.status_code}): {response.text}")
     return response.json()
 

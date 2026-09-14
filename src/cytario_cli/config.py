@@ -63,6 +63,10 @@ class CliState:
         STATE_FILE.write_text(json.dumps(self.__dict__), encoding="utf-8")
         STATE_FILE.chmod(FILE_MODE)
 
+    def delete(self) -> None:
+        """Remove the persisted state (signed-out / dead grant)."""
+        STATE_FILE.unlink(missing_ok=True)
+
 
 def write_token_file(profile_slug: str, id_token: str) -> Path:
     """Write the ID token for one connection profile and return its path."""

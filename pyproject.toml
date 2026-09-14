@@ -111,6 +111,7 @@ ignore = [
 ]
 "tests/*" = [
   "ARG005",  # stub lambdas ignore their args by design
+  "SLF001",  # tests may drive private helpers directly
 
   "S101",    # asserts are the point of a test suite
   "S105",    # "hardcoded password" strings are test fixtures

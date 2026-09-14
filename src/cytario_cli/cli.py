@@ -36,7 +36,14 @@ from . import __version__
 from .api import ApiError, list_connections, serves_cytario_api
 from .awsconfig import write_profile
 from .config import CliState, write_token_file
-from .oidc import OidcError, discover, id_token_expiry, login_flow, refresh_token
+from .oidc import (
+    OidcError,
+    RefreshGrantError,
+    discover,
+    id_token_expiry,
+    login_flow,
+    refresh_token,
+)
 
 app = typer.Typer(
     help="Work with Cytario storage connections as the signed-in user.",
@@ -82,7 +89,16 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
     if state.id_token and id_token_expiry(state.id_token) - time.time() > min_validity:
         return state.id_token
     typer.echo("Refreshing the ID token...")
-    tokens = refresh_token(state.token_endpoint, state.refresh_token)
+    try:
+        tokens = refresh_token(state.token_endpoint, state.refresh_token)
+    except RefreshGrantError:
+        state.delete()
+        typer.secho(
+            "Your saved sign-in is no longer valid. "
+            f"Run `cytario auth login --host {state.host}` to sign in again.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2) from None
     state.refresh_token = tokens["refresh_token"]
     state.id_token = tokens["id_token"]
     state.id_token_expires_at = id_token_expiry(tokens["id_token"])
