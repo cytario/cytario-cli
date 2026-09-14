@@ -23,6 +23,7 @@ from .config import CLIENT_ID, SCOPE_OFFLINE
 
 WELL_KNOWN_PATHS = (
     "/.well-known/openid-configuration",
+    "/realms/cytario/.well-known/openid-configuration",
     "/auth/realms/cytario/.well-known/openid-configuration",
 )
 

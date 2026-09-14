@@ -57,8 +57,29 @@ class TestDiscover:
         )
 
     @respx.mock
-    def test_falls_back_to_realm_path(self):
+    def test_discovers_keycloak_realm_path(self):
+        respx.get("https://auth.cytar.io/.well-known/openid-configuration").mock(
+            side_effect=httpx.ConnectError("unreachable")
+        )
+        respx.get("https://auth.cytar.io/auth/realms/cytario/.well-known/openid-configuration").mock(
+            side_effect=httpx.ConnectError("unreachable")
+        )
+        respx.get("https://auth.cytar.io/realms/cytario/.well-known/openid-configuration").respond(
+            json={
+                "issuer": "https://auth.cytar.io/realms/cytario",
+                "authorization_endpoint": "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth",
+                "token_endpoint": "https://auth.cytar.io/realms/cytario/protocol/openid-connect/token",
+            }
+        )
+        discovery = discover("https://auth.cytar.io")
+        assert discovery.issuer == "https://auth.cytar.io/realms/cytario"
+
+    @respx.mock
+    def test_falls_back_to_auth_realm_path(self):
         respx.get("https://app.example.com/.well-known/openid-configuration").mock(
+            side_effect=httpx.ConnectError("no")
+        )
+        respx.get("https://app.example.com/realms/cytario/.well-known/openid-configuration").mock(
             side_effect=httpx.ConnectError("no")
         )
         respx.get("https://app.example.com/auth/realms/cytario/.well-known/openid-configuration").respond(
