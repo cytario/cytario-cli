@@ -208,7 +208,23 @@ def login_flow(discovery: Discovery) -> dict[str, str]:
         "code_challenge_method": "S256",
     }
     authorization_url = f"{discovery.authorization_endpoint}?{urlencode(params)}"
-    webbrowser.open(authorization_url)
+    opened = webbrowser.open(authorization_url)
+    if not opened:
+        # No browser on this machine (headless workstation, container, SSH
+        # session). The authorization URL can be opened on any device, but the
+        # sign-in completes only when the browser can redirect back to this
+        # machine's loopback — on a remote/workspace host that requires
+        # forwarding the loopback port to the browsing device (e.g. SSH
+        # -L / Coder port-forward of this port) first.
+        print("No browser available on this machine.")
+        print()
+        print("1. Forward this machine's loopback port to a device with a browser, e.g.:")
+        print(f"   ssh -L {port}:127.0.0.1:{port} <this-host>")
+        print("2. Then open this URL there:")
+        print()
+        print(authorization_url)
+        print()
+        print(f"Waiting for the sign-in redirect on 127.0.0.1:{port} ... (Ctrl+C to cancel)")
 
     result = receiver.wait_for_code()
     if "error" in result:
