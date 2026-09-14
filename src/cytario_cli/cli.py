@@ -11,10 +11,12 @@ Commands:
   connections setup [--all | NAME] Write AWS CLI profiles + token files.
 
 Host selection order: --host flag, CYTARIO_HOST environment variable, the
-persisted default from the last login.
+persisted default from the last login. The host is the cytario WEB app
+(e.g. https://app.cytar.io) — not the identity host; the identity endpoints
+are derived from it automatically.
 
 Usage:
-  cytario auth login --host https://app.cytario.com
+  cytario auth login --host https://app.cytar.io
   cytario connections list --json
   cytario connections setup --all
   aws s3 ls --profile cytario-mybucket
@@ -31,7 +33,7 @@ from typing import Annotated
 import typer
 
 from . import __version__
-from .api import ApiError, list_connections
+from .api import ApiError, list_connections, serves_cytario_api
 from .awsconfig import write_profile
 from .config import CliState, write_token_file
 from .oidc import OidcError, discover, id_token_expiry, login_flow, refresh_token
@@ -90,13 +92,29 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
 
 @auth_app.command("login")
 def auth_login(
-    host: Annotated[str | None, typer.Option(help="Cytario host, e.g. https://app.cytario.com")] = None,
+    host: Annotated[
+        str | None, typer.Option(help="Cytario web host, e.g. https://app.cytar.io (not the identity host)")
+    ] = None,
 ) -> None:
     """Sign in through the browser (Authorization Code + PKCE)."""
     resolved_host = _resolve_host(host)
     typer.echo(f"Signing in to {resolved_host}...")
     try:
         discovery = discover(resolved_host)
+    except OidcError as error:
+        typer.secho(f"Sign-in failed: {error}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from error
+    # The web host serves the API; the identity host does not. A host whose
+    # OIDC document resolved but that serves no Cytario API is the identity
+    # host — the API calls would 404 later, so refuse it now.
+    if not serves_cytario_api(resolved_host):
+        typer.secho(
+            f"{resolved_host} does not serve the Cytario API — it looks like the identity host. "
+            "Sign in with the cytario web host instead, e.g. https://app.cytar.io.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    try:
         tokens = login_flow(discovery)
     except OidcError as error:
         typer.secho(f"Sign-in failed: {error}", fg=typer.colors.RED)
