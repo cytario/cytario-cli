@@ -110,6 +110,8 @@ ignore = [
   "T201",  # the login flow prints interactive guidance (no typer in this layer)
 ]
 "tests/*" = [
+  "ARG001",  # fixtures are requested for their side effects
+  "ARG002",  # fixture-backed test methods take the state they set up
   "ARG005",  # stub lambdas ignore their args by design
   "SLF001",  # tests may drive private helpers directly
 

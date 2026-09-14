@@ -86,6 +86,7 @@ class TestFreshTokenSignsOutGracefully:
             json={
                 "refresh_token": "rotated",
                 "id_token": id_token,
+                "access_token": "access-1",
                 "expires_in": 3600,
             }
         )

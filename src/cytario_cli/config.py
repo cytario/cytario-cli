@@ -36,6 +36,8 @@ class CliState:
     refresh_token: str
     id_token: str | None = None
     id_token_expires_at: float = 0.0  # epoch seconds; 0 = unknown
+    access_token: str | None = None
+    access_token_expires_at: float = 0.0  # epoch seconds; 0 = unknown
 
     @classmethod
     def load(cls) -> CliState | None:
@@ -53,6 +55,8 @@ class CliState:
                 refresh_token=data["refresh_token"],
                 id_token=data.get("id_token"),
                 id_token_expires_at=data.get("id_token_expires_at", 0.0),
+                access_token=data.get("access_token"),
+                access_token_expires_at=data.get("access_token_expires_at", 0.0),
             )
         except KeyError:
             return None

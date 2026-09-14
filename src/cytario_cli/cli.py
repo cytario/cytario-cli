@@ -88,7 +88,7 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
     """Return an ID token with at least min_validity seconds left, refreshing as needed."""
     if state.id_token and id_token_expiry(state.id_token) - time.time() > min_validity:
         return state.id_token
-    typer.echo("Refreshing the ID token...")
+    typer.echo("Refreshing tokens...")
     try:
         tokens = refresh_token(state.token_endpoint, state.refresh_token)
     except RefreshGrantError:
@@ -99,11 +99,39 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2) from None
+    _store_refreshed_tokens(state, tokens)
+    return state.id_token
+
+
+def _store_refreshed_tokens(state: CliState, tokens: dict[str, str]) -> None:
+    """Persist a token response (rotation, both token types, expiries)."""
     state.refresh_token = tokens["refresh_token"]
     state.id_token = tokens["id_token"]
     state.id_token_expires_at = id_token_expiry(tokens["id_token"])
+    if tokens.get("access_token"):
+        state.access_token = tokens["access_token"]
+        state.access_token_expires_at = time.time() + float(tokens.get("expires_in", 0))
     state.save()
-    return state.id_token
+
+
+def _fresh_access_token(state: CliState, min_validity: float = 300.0) -> str:
+    """Return an access token with at least min_validity seconds left, refreshing as needed.
+
+    The my-connections endpoint authenticates with and forwards this token:
+    the portal catalog lookups exchange it (RFC 8693) to resolve the org —
+    the ID token is not exchangable.
+    """
+    if state.access_token and state.access_token_expires_at - time.time() > min_validity:
+        return state.access_token
+    # Reuse the ID-token path: it refreshes both tokens in one grant call.
+    _fresh_id_token(state)
+    if not state.access_token:
+        typer.secho(
+            "No access token available. Run `cytario auth login` to sign in again.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    return state.access_token
 
 
 @auth_app.command("login")
@@ -143,6 +171,10 @@ def auth_login(
         refresh_token=tokens["refresh_token"],
         id_token=tokens["id_token"],
         id_token_expires_at=id_token_expiry(tokens["id_token"]),
+        access_token=tokens.get("access_token"),
+        access_token_expires_at=time.time() + float(tokens.get("expires_in", 0))
+        if tokens.get("access_token")
+        else 0.0,
     )
     state.save()
     typer.secho(f"Signed in to {resolved_host}.", fg=typer.colors.GREEN)
@@ -159,13 +191,14 @@ def auth_token() -> None:
 def auth_refresh() -> None:
     """Refresh every managed token file to a current ID token."""
     state = _load_state()
+    access_token = _fresh_access_token(state)
     id_token = _fresh_id_token(state)
-    _refresh_token_files(state.host, id_token)
+    _refresh_token_files(state.host, access_token, id_token)
 
 
-def _refresh_token_files(host: str, id_token: str) -> None:
+def _refresh_token_files(host: str, access_token: str, id_token: str) -> None:
     try:
-        connections = list_connections(host, id_token)
+        connections = list_connections(host, access_token)
     except ApiError as error:
         typer.secho(f"Could not list connections: {error}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
@@ -196,9 +229,9 @@ def connections_list(
     """List the user's visible connections with their resolved grants."""
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
-    id_token = _fresh_id_token(state)
+    access_token = _fresh_access_token(state)
     try:
-        connections = list_connections(resolved_host, id_token)
+        connections = list_connections(resolved_host, access_token)
     except ApiError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
@@ -248,9 +281,10 @@ def connections_setup(
     """Write an AWS CLI profile (web_identity_token_file) for each connection."""
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
+    access_token = _fresh_access_token(state)
     id_token = _fresh_id_token(state)
     try:
-        connections = list_connections(resolved_host, id_token)
+        connections = list_connections(resolved_host, access_token)
     except ApiError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
