@@ -75,6 +75,39 @@ class TestDiscover:
         assert discovery.issuer == "https://auth.cytar.io/realms/cytario"
 
     @respx.mock
+    def test_derives_identity_from_login_redirect(self):
+        """The web app proxies no discovery document: /login's Location wins."""
+        for path in (
+            "/.well-known/openid-configuration",
+            "/realms/cytario/.well-known/openid-configuration",
+            "/auth/realms/cytario/.well-known/openid-configuration",
+        ):
+            respx.get(f"https://app.cytar.io{path}").mock(side_effect=httpx.ConnectError("no"))
+        respx.get("https://app.cytar.io/login").respond(
+            status_code=302,
+            headers={
+                "location": (
+                    "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth"
+                    "?client_id=cytario-web&redirect_uri=...&state=..."
+                )
+            },
+        )
+        discovery = discover("https://app.cytar.io")
+        assert discovery.issuer == "https://auth.cytar.io/realms/cytario"
+        assert discovery.authorization_endpoint == (
+            "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth"
+        )
+        assert discovery.token_endpoint == (
+            "https://auth.cytar.io/realms/cytario/protocol/openid-connect/token"
+        )
+
+    @respx.mock
+    def test_raises_when_no_discovery_and_no_redirect(self):
+        respx.route(host="app.example.com").mock(side_effect=httpx.ConnectError("down"))
+        with pytest.raises(Exception, match="Could not resolve the identity service"):
+            discover("https://app.example.com")
+
+    @respx.mock
     def test_falls_back_to_auth_realm_path(self):
         respx.get("https://app.example.com/.well-known/openid-configuration").mock(
             side_effect=httpx.ConnectError("no")
@@ -95,5 +128,5 @@ class TestDiscover:
     @respx.mock
     def test_raises_when_unreachable(self):
         respx.route(host="app.example.com").mock(side_effect=httpx.ConnectError("down"))
-        with pytest.raises(Exception, match="discovery"):
+        with pytest.raises(Exception, match="Could not resolve the identity service"):
             discover("https://app.example.com")

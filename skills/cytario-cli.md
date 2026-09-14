@@ -11,10 +11,15 @@ workstation's standard AWS tooling — never with the user's browser credentials
 
 ## Steps
 
-1. **Sign in (once per session):** run `cytario auth login --host <cytario-host>`
-   (the host is remembered; `CYTARIO_HOST` also works). A browser window opens for
+1. **Sign in (once per session):** run `cytario auth login --host <cytario-web-host>`
+   (e.g. `https://app.cytar.io` — the **web app** host, not the identity host;
+   the host is remembered; `CYTARIO_HOST` also works). A browser window opens for
    the user to sign in; the CLI receives the result on a loopback redirect and
-   stores a refresh grant in `~/.config/cytario/cli/`. If the user has recently
+   stores a refresh grant in `~/.config/cytario/cli/`. On a machine with no
+   browser (a remote workspace, an SSH session), the CLI prints the
+   authorization URL plus the loopback port instead — the user must forward
+   that port to a device with a browser (e.g. `ssh -L <port>:127.0.0.1:<port>`)
+   and open the URL there. If the user has recently
    signed in on this machine, check first with `cytario auth status`.
 2. **Discover the data:** `cytario connections list --json` returns every
    connection visible to the user with bucket, prefix, region, endpoints, and the

@@ -3,18 +3,18 @@
 Writes one named profile per connection into ~/.aws/config, pointing the
 standard AWS tooling at the connection's storage role via
 ``web_identity_token_file`` — the tooling performs AssumeRoleWithWebIdentity
-itself. Only profile blocks the CLI itself created are ever replaced.
+itself. Only profile blocks the CLI itself created are ever replaced; the
+rest of the file (user profiles, comments, formatting) is preserved
+byte-for-byte.
 """
 
 from __future__ import annotations
 
-import configparser
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 PROFILE_PREFIX = "cytario-"
-MANAGED_HEADER = "# managed by cytario-cli"
 AWS_CONFIG_PATH = Path.home() / ".aws" / "config"
 
 
@@ -57,30 +57,48 @@ def profile_name(connection: Connection) -> str:
     return f"{PROFILE_PREFIX}{connection.slug}"
 
 
-def _section_name(profile: str) -> str:
-    return f"profile {profile}"
+def _section_header(profile: str) -> str:
+    return f"[profile {profile}]"
+
+
+def _profile_block(connection: Connection, token_file: Path) -> str:
+    """Render the managed profile block (with its own comment header)."""
+    lines = [
+        "# managed by cytario-cli",
+        _section_header(profile_name(connection)),
+        f"region = {connection.region}",
+        f"role_arn = {connection.role_arn or ''}",
+        f"web_identity_token_file = {token_file}",
+    ]
+    # S3-compatible providers need explicit endpoints; AWS S3 works by default.
+    if "amazonaws.com" not in connection.s3_endpoint:
+        lines.append(f"endpoint_url = {connection.s3_endpoint}")
+    return "\n".join(lines)
 
 
 def write_profile(connection: Connection, token_file: Path) -> str:
-    """Upsert the AWS CLI profile block for a connection; return the profile name."""
-    config = configparser.RawConfigParser()
-    config.optionxform = str  # type: ignore[method-assign]  # keep case of AWS keys
-    if AWS_CONFIG_PATH.exists():
-        config.read(AWS_CONFIG_PATH, encoding="utf-8")
+    """Upsert the AWS CLI profile block for a connection; return the profile name.
 
-    section = _section_name(profile_name(connection))
-    if not config.has_section(section):
-        config.add_section(section)
-    config.set(section, "region", connection.region)
-    config.set(section, "role_arn", connection.role_arn or "")
-    config.set(section, "web_identity_token_file", str(token_file))
-    # S3-compatible providers need explicit endpoints; AWS S3 works by default.
-    is_aws_s3 = "amazonaws.com" in connection.s3_endpoint
-    if not is_aws_s3:
-        config.set(section, "endpoint_url", connection.s3_endpoint)
-
+    Surgical text-level replace: the block (comment + section) is replaced or
+    appended in place, leaving every other byte of the file untouched.
+    """
     AWS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with AWS_CONFIG_PATH.open("w", encoding="utf-8") as handle:
-        handle.write(f"{MANAGED_HEADER}\n")
-        config.write(handle)
+    existing = AWS_CONFIG_PATH.read_text(encoding="utf-8") if AWS_CONFIG_PATH.exists() else ""
+
+    block = _profile_block(connection, token_file)
+
+    # Match an optional preceding managed-comment plus the section body up to
+    pattern = re.compile(
+        r"(?:^# managed by cytario-cli\n)?^\[profile "
+        + re.escape(profile_name(connection))
+        + r"\]\n(?:(?!\[).*\n?)*",
+        re.MULTILINE,
+    )
+    if pattern.search(existing):
+        updated = pattern.sub(block, existing, count=1)
+    else:
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        updated = f"{existing}{separator}{block}\n"
+
+    AWS_CONFIG_PATH.write_text(updated, encoding="utf-8")
     return profile_name(connection)

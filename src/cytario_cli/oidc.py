@@ -1,12 +1,20 @@
 """OIDC Authorization Code + PKCE with a loopback redirect receiver (RFC 8252).
 
-Also covers token refresh and discovery-document lookups. The CLI never holds
-a client secret: it is a public client.
+Also covers token refresh and discovery lookups. The CLI never holds a
+client secret: it is a public client.
+
+The user-facing host is the cytario WEB app (e.g. https://app.cytar.io) —
+the origin that serves /api/me/connections. Identity endpoints are derived
+from it: either the host proxies a discovery document, or (the normal
+deployment shape) the web app's /login route redirects to the identity
+service's authorization endpoint, from which the issuer and token endpoint
+are derived.
 """
 
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import secrets
@@ -26,6 +34,10 @@ WELL_KNOWN_PATHS = (
     "/realms/cytario/.well-known/openid-configuration",
     "/auth/realms/cytario/.well-known/openid-configuration",
 )
+
+REDIRECT_STATUS = (301, 302, 303, 307, 308)
+
+AUTH_PATH_MARKER = "/protocol/openid-connect/auth"
 
 
 @dataclass
@@ -64,11 +76,13 @@ def id_token_expiry(id_token: str) -> float:
 
 
 def discover(base_url: str) -> Discovery:
-    """Fetch the OIDC discovery document from a host.
+    """Resolve the OIDC endpoints from the cytario host.
 
-    `base_url` is either the cytario web host (e.g. https://app.cytario.com)
-    or the identity-service base URL itself. Both conventional locations are
-    probed.
+    `base_url` is the cytario web host (e.g. https://app.cytar.io); an
+    identity-service base URL also works. Well-known paths are probed first;
+    when none respond (the web app proxies no discovery document), the web
+    app's /login redirect to the authorization endpoint supplies the identity
+    service, and the issuer/token endpoint follow the realm layout.
     """
     base = base_url.rstrip("/")
     last_error: Exception | None = None
@@ -86,7 +100,37 @@ def discover(base_url: str) -> Discovery:
         except (httpx.HTTPError, KeyError, ValueError) as error:
             last_error = error
             continue
-    raise OidcError(f"Could not fetch the OIDC discovery document from {base}: {last_error}")
+    try:
+        return _discover_via_login_redirect(base)
+    except (OidcError, httpx.HTTPError) as error:
+        raise OidcError(
+            f"Could not resolve the identity service from {base}: {last_error}; {error}"
+        ) from error
+
+
+def _discover_via_login_redirect(base: str) -> Discovery:
+    """Derive the identity endpoints from the web app's /login redirect.
+
+    GET {base}/login answers a redirect whose Location is the authorization
+    endpoint; the realm base is that URL with the Keycloak authorization path
+    stripped, and the token endpoint sits alongside it.
+    """
+    response = httpx.get(f"{base}/login", timeout=10, follow_redirects=False)
+    location = response.headers.get("location")
+    if response.status_code not in REDIRECT_STATUS or not location:
+        raise OidcError(f"GET {base}/login did not redirect to the identity service ({response.status_code})")
+    authorization_endpoint = location.split("?")[0]
+    if not authorization_endpoint.endswith(AUTH_PATH_MARKER):
+        raise OidcError(
+            f"The login redirect does not point at an OIDC authorization endpoint: {authorization_endpoint}"
+        )
+    issuer = authorization_endpoint[: -len(AUTH_PATH_MARKER)]
+    token_endpoint = f"{issuer}/protocol/openid-connect/token"
+    return Discovery(
+        issuer=issuer,
+        authorization_endpoint=authorization_endpoint,
+        token_endpoint=token_endpoint,
+    )
 
 
 class LoopbackReceiver:
@@ -165,15 +209,29 @@ def login_flow(discovery: Discovery) -> dict[str, str]:
         "code_challenge_method": "S256",
     }
     authorization_url = f"{discovery.authorization_endpoint}?{urlencode(params)}"
-    webbrowser.open(authorization_url)
+    opened = webbrowser.open(authorization_url)
+    if not opened:
+        # No browser on this machine (headless workstation, container, SSH
+        # session). The authorization URL can be opened on any device, but the
+        # sign-in completes only when the browser can redirect back to this
+        # machine's loopback — on a remote/workspace host that requires
+        # forwarding the loopback port to the browsing device (e.g. SSH
+        # -L / Coder port-forward of this port) first.
+        print("No browser available on this machine.")
+        print()
+        print("1. Forward this machine's loopback port to a device with a browser, e.g.:")
+        print(f"   ssh -L {port}:127.0.0.1:{port} <this-host>")
+        print("2. Then open this URL there:")
+        print()
+        print(authorization_url)
+        print()
+        print(f"Waiting for the sign-in redirect on 127.0.0.1:{port} ... (Ctrl+C to cancel)")
 
     result = receiver.wait_for_code()
     if "error" in result:
         raise OidcError(f"Authorization failed: {result['error']}: {result.get('error_description', '')}")
     if "code" not in result:
         raise OidcError("The sign-in redirect carried no authorization code.")
-    if "state" in result:
-        pass  # state is validated by the sender via PKCE verifier uniqueness
 
     token_response = httpx.post(
         discovery.token_endpoint,
@@ -191,8 +249,20 @@ def login_flow(discovery: Discovery) -> dict[str, str]:
     return token_response.json()
 
 
+class RefreshGrantError(OidcError):
+    """The stored refresh grant was revoked, expired, or already rotated."""
+
+
+HTTP_BAD_REQUEST = 400
+
+
 def refresh_token(discovery_token_endpoint: str, refresh_token_value: str) -> dict[str, str]:
-    """Redeem a refresh grant; return the token response."""
+    """Redeem a refresh grant; return the token response.
+
+    Raises RefreshGrantError when the grant was revoked, expired, or
+    already used under rotation — the caller must treat this as signed-out
+    rather than a transient error.
+    """
     response = httpx.post(
         discovery_token_endpoint,
         data={
@@ -203,6 +273,12 @@ def refresh_token(discovery_token_endpoint: str, refresh_token_value: str) -> di
         timeout=15,
     )
     if response.status_code != HTTP_OK:
+        if response.status_code == HTTP_BAD_REQUEST:
+            with contextlib.suppress(ValueError):
+                if response.json().get("error") == "invalid_grant":
+                    raise RefreshGrantError(
+                        "The saved sign-in is no longer valid (revoked, expired, or rotated)."
+                    )
         raise OidcError(f"The token refresh failed ({response.status_code}): {response.text}")
     return response.json()
 

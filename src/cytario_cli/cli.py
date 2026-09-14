@@ -11,10 +11,12 @@ Commands:
   connections setup [--all | NAME] Write AWS CLI profiles + token files.
 
 Host selection order: --host flag, CYTARIO_HOST environment variable, the
-persisted default from the last login.
+persisted default from the last login. The host is the cytario WEB app
+(e.g. https://app.cytar.io) — not the identity host; the identity endpoints
+are derived from it automatically.
 
 Usage:
-  cytario auth login --host https://app.cytario.com
+  cytario auth login --host https://app.cytar.io
   cytario connections list --json
   cytario connections setup --all
   aws s3 ls --profile cytario-mybucket
@@ -31,10 +33,17 @@ from typing import Annotated
 import typer
 
 from . import __version__
-from .api import ApiError, list_connections
+from .api import ApiError, list_connections, serves_cytario_api
 from .awsconfig import write_profile
 from .config import CliState, write_token_file
-from .oidc import OidcError, discover, id_token_expiry, login_flow, refresh_token
+from .oidc import (
+    OidcError,
+    RefreshGrantError,
+    discover,
+    id_token_expiry,
+    login_flow,
+    refresh_token,
+)
 
 app = typer.Typer(
     help="Work with Cytario storage connections as the signed-in user.",
@@ -79,24 +88,77 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
     """Return an ID token with at least min_validity seconds left, refreshing as needed."""
     if state.id_token and id_token_expiry(state.id_token) - time.time() > min_validity:
         return state.id_token
-    typer.echo("Refreshing the ID token...")
-    tokens = refresh_token(state.token_endpoint, state.refresh_token)
+    typer.echo("Refreshing tokens...")
+    try:
+        tokens = refresh_token(state.token_endpoint, state.refresh_token)
+    except RefreshGrantError:
+        state.delete()
+        typer.secho(
+            "Your saved sign-in is no longer valid. "
+            f"Run `cytario auth login --host {state.host}` to sign in again.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2) from None
+    _store_refreshed_tokens(state, tokens)
+    return state.id_token
+
+
+def _store_refreshed_tokens(state: CliState, tokens: dict[str, str]) -> None:
+    """Persist a token response (rotation, both token types, expiries)."""
     state.refresh_token = tokens["refresh_token"]
     state.id_token = tokens["id_token"]
     state.id_token_expires_at = id_token_expiry(tokens["id_token"])
+    if tokens.get("access_token"):
+        state.access_token = tokens["access_token"]
+        state.access_token_expires_at = time.time() + float(tokens.get("expires_in", 0))
     state.save()
-    return state.id_token
+
+
+def _fresh_access_token(state: CliState, min_validity: float = 300.0) -> str:
+    """Return an access token with at least min_validity seconds left, refreshing as needed.
+
+    The my-connections endpoint authenticates with and forwards this token:
+    the portal catalog lookups exchange it (RFC 8693) to resolve the org —
+    the ID token is not exchangable.
+    """
+    if state.access_token and state.access_token_expires_at - time.time() > min_validity:
+        return state.access_token
+    # Reuse the ID-token path: it refreshes both tokens in one grant call.
+    _fresh_id_token(state)
+    if not state.access_token:
+        typer.secho(
+            "No access token available. Run `cytario auth login` to sign in again.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    return state.access_token
 
 
 @auth_app.command("login")
 def auth_login(
-    host: Annotated[str | None, typer.Option(help="Cytario host, e.g. https://app.cytario.com")] = None,
+    host: Annotated[
+        str | None, typer.Option(help="Cytario web host, e.g. https://app.cytar.io (not the identity host)")
+    ] = None,
 ) -> None:
     """Sign in through the browser (Authorization Code + PKCE)."""
     resolved_host = _resolve_host(host)
     typer.echo(f"Signing in to {resolved_host}...")
     try:
         discovery = discover(resolved_host)
+    except OidcError as error:
+        typer.secho(f"Sign-in failed: {error}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from error
+    # The web host serves the API; the identity host does not. A host whose
+    # OIDC document resolved but that serves no Cytario API is the identity
+    # host — the API calls would 404 later, so refuse it now.
+    if not serves_cytario_api(resolved_host):
+        typer.secho(
+            f"{resolved_host} does not serve the Cytario API — it looks like the identity host. "
+            "Sign in with the cytario web host instead, e.g. https://app.cytar.io.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    try:
         tokens = login_flow(discovery)
     except OidcError as error:
         typer.secho(f"Sign-in failed: {error}", fg=typer.colors.RED)
@@ -109,6 +171,10 @@ def auth_login(
         refresh_token=tokens["refresh_token"],
         id_token=tokens["id_token"],
         id_token_expires_at=id_token_expiry(tokens["id_token"]),
+        access_token=tokens.get("access_token"),
+        access_token_expires_at=time.time() + float(tokens.get("expires_in", 0))
+        if tokens.get("access_token")
+        else 0.0,
     )
     state.save()
     typer.secho(f"Signed in to {resolved_host}.", fg=typer.colors.GREEN)
@@ -125,13 +191,14 @@ def auth_token() -> None:
 def auth_refresh() -> None:
     """Refresh every managed token file to a current ID token."""
     state = _load_state()
+    access_token = _fresh_access_token(state)
     id_token = _fresh_id_token(state)
-    _refresh_token_files(state.host, id_token)
+    _refresh_token_files(state.host, access_token, id_token)
 
 
-def _refresh_token_files(host: str, id_token: str) -> None:
+def _refresh_token_files(host: str, access_token: str, id_token: str) -> None:
     try:
-        connections = list_connections(host, id_token)
+        connections = list_connections(host, access_token)
     except ApiError as error:
         typer.secho(f"Could not list connections: {error}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
@@ -162,9 +229,9 @@ def connections_list(
     """List the user's visible connections with their resolved grants."""
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
-    id_token = _fresh_id_token(state)
+    access_token = _fresh_access_token(state)
     try:
-        connections = list_connections(resolved_host, id_token)
+        connections = list_connections(resolved_host, access_token)
     except ApiError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
@@ -214,20 +281,33 @@ def connections_setup(
     """Write an AWS CLI profile (web_identity_token_file) for each connection."""
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
+    access_token = _fresh_access_token(state)
     id_token = _fresh_id_token(state)
     try:
-        connections = list_connections(resolved_host, id_token)
+        connections = list_connections(resolved_host, access_token)
     except ApiError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
 
+    if not connections:
+        typer.secho("No connections are visible to you on this host.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
     usable = [connection for connection in connections if connection.role_arn]
+    if not usable:
+        typer.secho(
+            "Connections are visible, but none has a grant applicable to you — "
+            "ask an organization admin for access (or check `cytario connections list`).",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
     if name:
         usable = [connection for connection in usable if connection.name == name]
         if not usable:
             typer.secho(f"No connection named {name!r} with an applicable grant.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
-    elif not setup_all and usable:
+    elif not setup_all:
         typer.echo("No connection selected; use --all or pass a connection name.")
         raise typer.Exit(code=2)
 
@@ -237,8 +317,6 @@ def connections_setup(
         typer.secho(
             f"{connection.name}: profile {profile!r} ready (token {token_file}).", fg=typer.colors.GREEN
         )
-    if not usable:
-        typer.echo("Nothing to set up — no connection has an applicable grant.")
 
 
 @app.callback()

@@ -36,6 +36,8 @@ class CliState:
     refresh_token: str
     id_token: str | None = None
     id_token_expires_at: float = 0.0  # epoch seconds; 0 = unknown
+    access_token: str | None = None
+    access_token_expires_at: float = 0.0  # epoch seconds; 0 = unknown
 
     @classmethod
     def load(cls) -> CliState | None:
@@ -53,6 +55,8 @@ class CliState:
                 refresh_token=data["refresh_token"],
                 id_token=data.get("id_token"),
                 id_token_expires_at=data.get("id_token_expires_at", 0.0),
+                access_token=data.get("access_token"),
+                access_token_expires_at=data.get("access_token_expires_at", 0.0),
             )
         except KeyError:
             return None
@@ -62,6 +66,10 @@ class CliState:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         STATE_FILE.write_text(json.dumps(self.__dict__), encoding="utf-8")
         STATE_FILE.chmod(FILE_MODE)
+
+    def delete(self) -> None:
+        """Remove the persisted state (signed-out / dead grant)."""
+        STATE_FILE.unlink(missing_ok=True)
 
 
 def write_token_file(profile_slug: str, id_token: str) -> Path:

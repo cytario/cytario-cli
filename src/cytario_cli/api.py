@@ -8,10 +8,25 @@ from .awsconfig import Connection
 
 HTTP_UNAUTHORIZED = 401
 HTTP_OK = 200
+HTTP_CLIENT_ERROR = 400
 
 
 class ApiError(Exception):
     """Raised when the my-connections endpoint fails."""
+
+
+def serves_cytario_api(host: str) -> bool:
+    """Report whether the host serves the Cytario web API.
+
+    The web app answers a HEAD or GET on / with a 2xx/3xx; the identity host
+    answers 404 or a Keycloak page. Used to reject identity-host sign-ins up
+    front (the API would 404 later otherwise).
+    """
+    try:
+        response = httpx.head(host.rstrip("/"), timeout=10, follow_redirects=False)
+    except httpx.HTTPError:
+        return False
+    return response.status_code < HTTP_CLIENT_ERROR
 
 
 def list_connections(host: str, id_token: str) -> list[Connection]:
