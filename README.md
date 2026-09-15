@@ -21,7 +21,26 @@ with connection data using the workstation's standard AWS tooling.
   stdout, and a rewrite of all managed token files (tokens live ~1 hour).
 
 Agents: see [`skills/cytario-cli.md`](skills/cytario-cli.md) for the
-tool-neutral agent workflow shipped with this repo.
+tool-neutral agent workflow shipped with this repo — what Cytario is,
+how its data (annotations, view settings, results, job configs) is laid
+out in your buckets, and the CLI workflow on top.
+
+## Installing the skill
+
+The skill file is plain Markdown with a `name`/`description` front-matter
+envelope and is not part of the PyPI package. To use it with an agent that
+picks up skills from a directory (Claude Code, Cline, any tool that scans a
+skills folder), fetch it from the repo and point your tool at it, e.g.:
+
+```bash
+mkdir -p ~/.claude/skills   # or your tool's skills directory
+curl -fsSL -o ~/.claude/skills/cytario-cli.md \
+  https://raw.githubusercontent.com/cytario/cytario-cli/main/skills/cytario-cli.md
+```
+
+Replace `main` with a release tag to pin a version. For tools without a
+skills mechanism, paste the file's contents into your agent's system prompt
+or project instructions — the file is self-contained.
 
 ## Install
 
