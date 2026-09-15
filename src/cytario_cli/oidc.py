@@ -3,7 +3,7 @@
 Also covers token refresh and discovery lookups. The CLI never holds a
 client secret: it is a public client.
 
-The user-facing host is the cytario WEB app (e.g. https://app.cytar.io) —
+The user-facing host is the cytario WEB app (e.g. https://app.cytario.com) —
 the origin that serves /api/me/connections. Identity endpoints are derived
 from it: either the host proxies a discovery document, or (the normal
 deployment shape) the web app's /login route redirects to the identity
@@ -78,7 +78,7 @@ def id_token_expiry(id_token: str) -> float:
 def discover(base_url: str) -> Discovery:
     """Resolve the OIDC endpoints from the cytario host.
 
-    `base_url` is the cytario web host (e.g. https://app.cytar.io); an
+    `base_url` is the cytario web host (e.g. https://app.cytario.com); an
     identity-service base URL also works. Well-known paths are probed first;
     when none respond (the web app proxies no discovery document), the web
     app's /login redirect to the authorization endpoint supplies the identity
