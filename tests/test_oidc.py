@@ -58,21 +58,21 @@ class TestDiscover:
 
     @respx.mock
     def test_discovers_keycloak_realm_path(self):
-        respx.get("https://auth.cytar.io/.well-known/openid-configuration").mock(
+        respx.get("https://auth.cytario.com/.well-known/openid-configuration").mock(
             side_effect=httpx.ConnectError("unreachable")
         )
-        respx.get("https://auth.cytar.io/auth/realms/cytario/.well-known/openid-configuration").mock(
+        respx.get("https://auth.cytario.com/auth/realms/cytario/.well-known/openid-configuration").mock(
             side_effect=httpx.ConnectError("unreachable")
         )
-        respx.get("https://auth.cytar.io/realms/cytario/.well-known/openid-configuration").respond(
+        respx.get("https://auth.cytario.com/realms/cytario/.well-known/openid-configuration").respond(
             json={
-                "issuer": "https://auth.cytar.io/realms/cytario",
-                "authorization_endpoint": "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth",
-                "token_endpoint": "https://auth.cytar.io/realms/cytario/protocol/openid-connect/token",
+                "issuer": "https://auth.cytario.com/realms/cytario",
+                "authorization_endpoint": "https://auth.cytario.com/realms/cytario/protocol/openid-connect/auth",
+                "token_endpoint": "https://auth.cytario.com/realms/cytario/protocol/openid-connect/token",
             }
         )
-        discovery = discover("https://auth.cytar.io")
-        assert discovery.issuer == "https://auth.cytar.io/realms/cytario"
+        discovery = discover("https://auth.cytario.com")
+        assert discovery.issuer == "https://auth.cytario.com/realms/cytario"
 
     @respx.mock
     def test_derives_identity_from_login_redirect(self):
@@ -82,23 +82,23 @@ class TestDiscover:
             "/realms/cytario/.well-known/openid-configuration",
             "/auth/realms/cytario/.well-known/openid-configuration",
         ):
-            respx.get(f"https://app.cytar.io{path}").mock(side_effect=httpx.ConnectError("no"))
-        respx.get("https://app.cytar.io/login").respond(
+            respx.get(f"https://app.cytario.com{path}").mock(side_effect=httpx.ConnectError("no"))
+        respx.get("https://app.cytario.com/login").respond(
             status_code=302,
             headers={
                 "location": (
-                    "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth"
+                    "https://auth.cytario.com/realms/cytario/protocol/openid-connect/auth"
                     "?client_id=cytario-web&redirect_uri=...&state=..."
                 )
             },
         )
-        discovery = discover("https://app.cytar.io")
-        assert discovery.issuer == "https://auth.cytar.io/realms/cytario"
+        discovery = discover("https://app.cytario.com")
+        assert discovery.issuer == "https://auth.cytario.com/realms/cytario"
         assert discovery.authorization_endpoint == (
-            "https://auth.cytar.io/realms/cytario/protocol/openid-connect/auth"
+            "https://auth.cytario.com/realms/cytario/protocol/openid-connect/auth"
         )
         assert discovery.token_endpoint == (
-            "https://auth.cytar.io/realms/cytario/protocol/openid-connect/token"
+            "https://auth.cytario.com/realms/cytario/protocol/openid-connect/token"
         )
 
     @respx.mock

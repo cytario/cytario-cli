@@ -54,7 +54,7 @@ stored beyond your own refresh grant.
 ## Usage
 
 ```bash
-cytario auth login --host https://app.cytar.io
+cytario auth login --host https://app.cytario.com
 cytario connections list
 cytario connections setup --all
 aws s3 ls --profile cytario-mybucket
@@ -62,7 +62,7 @@ aws s3 ls --profile cytario-mybucket
 
 Host resolution order: `--host`, then `CYTARIO_HOST`, then the last
 signed-in host. The host is the **cytario web app** (e.g.
-`https://app.cytar.io`) — not the identity host (`https://auth.cytar.io`);
+`https://app.cytario.com`) — not the identity host (`https://auth.cytario.com`);
 the CLI derives the identity endpoints from it automatically.
 
 ## Security model

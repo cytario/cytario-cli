@@ -15,14 +15,14 @@ ENDPOINT = f"{HOST}/api/me/connections"
 class TestServesCytarioApi:
     @respx.mock
     def test_web_host_answers_root(self):
-        respx.head("https://app.cytar.io").respond(status_code=200)
-        assert serves_cytario_api("https://app.cytar.io") is True
+        respx.head("https://app.cytario.com").respond(status_code=200)
+        assert serves_cytario_api("https://app.cytario.com") is True
 
     @respx.mock
     def test_identity_host_404s_on_root(self):
         # Keycloak's front page sits under /realms; the bare root 404s.
-        respx.head("https://auth.cytar.io").respond(status_code=404)
-        assert serves_cytario_api("https://auth.cytar.io") is False
+        respx.head("https://auth.cytario.com").respond(status_code=404)
+        assert serves_cytario_api("https://auth.cytario.com") is False
 
     @respx.mock
     def test_unreachable_host_is_not_serving(self):

@@ -12,11 +12,11 @@ Commands:
 
 Host selection order: --host flag, CYTARIO_HOST environment variable, the
 persisted default from the last login. The host is the cytario WEB app
-(e.g. https://app.cytar.io) — not the identity host; the identity endpoints
+(e.g. https://app.cytario.com) — not the identity host; the identity endpoints
 are derived from it automatically.
 
 Usage:
-  cytario auth login --host https://app.cytar.io
+  cytario auth login --host https://app.cytario.com
   cytario connections list --json
   cytario connections setup --all
   aws s3 ls --profile cytario-mybucket
@@ -137,7 +137,8 @@ def _fresh_access_token(state: CliState, min_validity: float = 300.0) -> str:
 @auth_app.command("login")
 def auth_login(
     host: Annotated[
-        str | None, typer.Option(help="Cytario web host, e.g. https://app.cytar.io (not the identity host)")
+        str | None,
+        typer.Option(help="Cytario web host, e.g. https://app.cytario.com (not the identity host)"),
     ] = None,
 ) -> None:
     """Sign in through the browser (Authorization Code + PKCE)."""
@@ -154,7 +155,7 @@ def auth_login(
     if not serves_cytario_api(resolved_host):
         typer.secho(
             f"{resolved_host} does not serve the Cytario API — it looks like the identity host. "
-            "Sign in with the cytario web host instead, e.g. https://app.cytar.io.",
+            "Sign in with the cytario web host instead, e.g. https://app.cytario.com.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2)
