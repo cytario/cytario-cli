@@ -24,27 +24,36 @@ with connection data using the workstation's standard AWS tooling.
 - **`cytario auth token` / `cytario auth refresh`** — a fresh ID token on
   stdout, and a rewrite of all managed token files (tokens live ~1 hour).
 
-Agents: see [`skills/cytario-cli.md`](skills/cytario-cli.md) for the
-tool-neutral agent workflow shipped with this repo — what Cytario is,
+Agents: see the packaged skill file ([`src/cytario_cli/skills/cytario-cli.md`](src/cytario_cli/skills/cytario-cli.md))
+for the tool-neutral agent workflow shipped with this repo — what Cytario is,
 how its data (annotations, view settings, results, job configs) is laid
 out in your buckets, and the CLI workflow on top.
 
 ## Installing the skill
 
-The skill file is plain Markdown with a `name`/`description` front-matter
-envelope and is not part of the PyPI package. To use it with an agent that
-picks up skills from a directory (Claude Code, Cline, any tool that scans a
-skills folder), fetch it from the repo and point your tool at it, e.g.:
+The skill file ships inside the PyPI package and is installed for your AI
+tooling with one command (no network fetch — the copy always matches the
+installed CLI version):
 
 ```bash
-mkdir -p ~/.claude/skills   # or your tool's skills directory
-curl -fsSL -o ~/.claude/skills/cytario-cli.md \
-  https://raw.githubusercontent.com/cytario/cytario-cli/main/skills/cytario-cli.md
+cytario skill install
 ```
 
-Replace `main` with a release tag to pin a version. For tools without a
-skills mechanism, paste the file's contents into your agent's system prompt
-or project instructions — the file is self-contained.
+The command probes the well-known skills directories of common AI tools
+(Claude Code, OpenCode, Cursor, Codex CLI), shows what it found, and writes
+the skill there. Re-running it after a CLI update refreshes stale copies
+(a locally modified copy is never overwritten without `--force`). Useful
+variations:
+
+```bash
+cytario skill list --json   # what is detected, and the install state
+cytario skill install --tool claude-code
+cytario skill install --path ~/.my-agent/skills
+```
+
+For tools without a skills mechanism, paste the file's contents into your
+agent's system prompt or project instructions — the file is self-contained
+(`cytario skill install --path <dir>` writes it anywhere).
 
 ## Install
 

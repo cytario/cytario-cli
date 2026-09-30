@@ -21,8 +21,10 @@ uv build                      # sdist + wheel
   publishing in the `pypi` environment).
 - npm-style comment discipline as the rest of Cytario: minimal comments, no
   ticket IDs in code, no history comments.
-- The skill file `skills/cytario-cli.md` documents the agent workflow; keep it
-  in sync with the CLI's commands.
+- The skill file `src/cytario_cli/skills/cytario-cli.md` documents the agent
+  workflow; keep it in sync with the CLI's commands. It ships in the package
+  as data, and `cytario skill install` distributes it — update it here, never
+  edit installed copies.
 - Security invariants (do not weaken):
   - public client only — no client secret is ever shipped or stored;
   - the refresh grant and token files are `0600` under `~/.config/cytario/cli`

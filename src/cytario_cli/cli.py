@@ -10,6 +10,9 @@ Commands:
                                    and token state.
   connections list [--json]       List the user's connections with their grants.
   connections setup [--all | NAME] Write AWS CLI profiles + token files.
+  skill list [--json]             Show detected AI tools and skill install state.
+  skill install [--tool ID] ...   Install or update the packaged agent skill
+                                   into the detected AI tools' directories.
 
 Host selection order: --host flag, CYTARIO_HOST environment variable, the
 persisted default from the last login. The host is the cytario WEB app
@@ -29,6 +32,7 @@ import json as json_module
 import os
 import sys
 import time
+from pathlib import Path  # noqa: TC003  # Typer resolves option annotations at runtime
 from typing import Annotated
 
 import typer
@@ -46,6 +50,14 @@ from .oidc import (
     login_flow,
     refresh_token,
 )
+from .skill import (
+    ToolTarget,
+    detect_tools,
+    install_skill,
+    install_status,
+    packaged_skill,
+    skill_file,
+)
 
 app = typer.Typer(
     help="Work with Cytario storage connections as the signed-in user.",
@@ -55,6 +67,8 @@ auth_app = typer.Typer(help="Sign in, tokens, and sign-out state.", no_args_is_h
 connections_app = typer.Typer(help="List connections and set up AWS CLI profiles.", no_args_is_help=True)
 app.add_typer(auth_app, name="auth")
 app.add_typer(connections_app, name="connections")
+skill_app = typer.Typer(help="Install and update the packaged agent skill.", no_args_is_help=True)
+app.add_typer(skill_app, name="skill")
 
 
 def _version_callback(value: bool) -> None:
@@ -346,6 +360,87 @@ def connections_setup(
         typer.secho(
             f"{connection.name}: profile {profile!r} ready (token {token_file}).", fg=typer.colors.GREEN
         )
+
+
+@skill_app.command("list")
+def skill_list(
+    as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
+) -> None:
+    """Show detected AI tools and whether the cytario skill is installed for each."""
+    tools = detect_tools()
+    packaged = packaged_skill()
+    if as_json:
+        typer.echo(
+            json_module.dumps(
+                [
+                    {
+                        "tool": tool.id,
+                        "name": tool.name,
+                        "skillsDir": str(tool.skills_dir),
+                        "skillFile": str(skill_file(tool)),
+                        "status": install_status(tool, packaged),
+                    }
+                    for tool in tools
+                ],
+                indent=2,
+            )
+        )
+        return
+    if not tools:
+        typer.echo("No known AI tool detected. Pass --path to install the skill into a custom directory.")
+        return
+    for tool in tools:
+        typer.echo(f"{tool.name}  {skill_file(tool)}  [{install_status(tool, packaged)}]")
+
+
+@skill_app.command("install")
+def skill_install(
+    tool_id: Annotated[
+        str | None,
+        typer.Option("--tool", help="Install for one tool id (see `cytario skill list`)"),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", help="Install into this directory instead of a detected tool's"),
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite a locally modified skill copy")] = False,
+) -> None:
+    """Install or update the packaged agent skill into your AI tools' directories."""
+    targets: list[ToolTarget]
+    if path:
+        targets = [ToolTarget("custom", "Custom directory", path, False)]
+    else:
+        targets = detect_tools()
+        if tool_id:
+            targets = [tool for tool in targets if tool.id == tool_id]
+            if not targets:
+                typer.secho(
+                    f"No detected tool with id {tool_id!r}. Run `cytario skill list` to see ids.",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=2)
+    if not targets:
+        typer.secho(
+            "No AI tool detected. Pass --path <dir> to install the skill manually.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    packaged = packaged_skill()
+    for tool in targets:
+        result = install_skill(tool, packaged, force=force)
+        destination = skill_file(tool)
+        if result == "up-to-date":
+            typer.secho(f"{tool.name}: {destination} already up to date.", fg=typer.colors.GREEN)
+        elif result == "stale-unforced":
+            typer.secho(
+                f"{tool.name}: {destination} differs from the packaged skill "
+                "(locally modified or outdated). Re-run with --force to overwrite.",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            verb = "written to" if result == "installed" else "updated at"
+            typer.secho(f"{tool.name}: skill {verb} {destination}.", fg=typer.colors.GREEN)
 
 
 @app.callback()
