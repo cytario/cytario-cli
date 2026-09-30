@@ -39,6 +39,9 @@ REDIRECT_STATUS = (301, 302, 303, 307, 308)
 
 AUTH_PATH_MARKER = "/protocol/openid-connect/auth"
 
+DESCRIBE_DONE_TITLE = "Describe complete"
+DESCRIBE_DONE_MESSAGE = "Describe complete — you can close this tab."
+
 
 @dataclass
 class Discovery:
@@ -144,8 +147,17 @@ def _discover_via_login_redirect(base: str) -> Discovery:
 class LoopbackReceiver:
     """One-shot localhost HTTP server receiving the authorization redirect."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        done_title: str = "Sign-in complete",
+        done_message: str = "Sign-in complete. You can close this window.",
+    ) -> None:
         """Bind nothing yet; the socket is created on the serve thread."""
+        self._done_title = done_title
+        self._done_body = (
+            f"<html><head><title>{done_title}</title></head>"
+            f"<body><p>{done_message}</p></body></html>".encode()
+        )
         self._result: dict[str, str] | None = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -168,7 +180,7 @@ class LoopbackReceiver:
             path = request.split(" ")[1] if " " in request else "/"
             query = parse_qs(urlparse(path).query)
             self._result = {key: values[0] for key, values in query.items()}
-            body = b"<html><body><p>Sign-in complete. You can close this window.</p></body></html>"
+            body = self._done_body
             connection.sendall(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
                 + str(len(body)).encode("ascii")

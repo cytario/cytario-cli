@@ -21,6 +21,11 @@ with connection data using the workstation's standard AWS tooling.
   `sub`, email, name), and token state; `--json` emits it machine-readable
   (agents need the `sub` to address per-user files such as
   `settings.<sub>.json` view presets).
+- **`cytario image describe s3://<bucket>/<key>`** — an image's metadata and
+  per-channel contrast limits as JSON, computed by the web app's real viewer
+  code: opens the `/agent/describe` route in the browser under your signed-in
+  session and receives the result on a loopback redirect. Requires a
+  cytario-web deployment that ships the route.
 - **`cytario auth token` / `cytario auth refresh`** — a fresh ID token on
   stdout, and a rewrite of all managed token files (tokens live ~1 hour).
 
@@ -71,6 +76,7 @@ stored beyond your own refresh grant.
 cytario auth login --host https://app.cytario.com
 cytario connections list
 cytario connections setup --all
+cytario image describe s3://mybucket/prefix/slide.ome.tif
 aws s3 ls --profile cytario-mybucket
 ```
 

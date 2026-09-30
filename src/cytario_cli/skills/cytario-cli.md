@@ -35,11 +35,20 @@ workstation's standard AWS tooling — never with the user's browser credentials
 2. **Discover the data:** `cytario connections list --json` returns every
    connection visible to the user with bucket, prefix, region, endpoints, and the
    user's access level (`read-only`, `annotate`, `read-write`, `admin`).
-3. **Configure AWS profiles:** `cytario connections setup --all` (or with a
+3. **Read image metadata and contrast limits:**
+   `cytario image describe s3://<bucket>/<key>` prints an image's dimensions,
+   pixel type, level count, channel keys/names/fluors/colors, and the
+   per-channel contrast limits as JSON. It opens the web app's describe page
+   in the browser (the user must be signed in) and receives the result on a
+   loopback redirect — this is the authoritative source for channel naming
+   and contrast values, because it uses the platform's own loaders and
+   auto-contrast recipe. On a deployment whose web app predates the route
+   the command says so and exits; fall back to the hand-rolled recipe below.
+4. **Configure AWS profiles:** `cytario connections setup --all` (or with a
    connection name) writes one AWS CLI profile per connection
    (`~/.aws/config`, `[profile cytario-<name>]`) plus token files under
    `~/.aws/cytario/`. Standard tooling then does the federation itself.
-4. **Work with the data** via the generated profiles:
+5. **Work with the data** via the generated profiles:
    - `aws --profile cytario-<name> s3 ls s3://<bucket>/<prefix>`
    - `aws --profile cytario-<name> s3 cp ...`
    - boto3: `boto3.session.Session(profile_name="cytario-<name>")`
@@ -47,7 +56,7 @@ workstation's standard AWS tooling — never with the user's browser credentials
      through a DuckDB MCP server if available, else locally
      (`python -c "import duckdb; …"` or the `duckdb` CLI) on files `s3 cp`'d
      to a scratch dir; pandas/pyarrow work too but lack geometry handling.
-5. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
+6. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
    re-reads the token file on every `AssumeRoleWithWebIdentity`, so before any
    operation expected to outlast a token (or on `ExpiredToken` errors) run
    `cytario auth refresh` to rewrite all token files from a fresh ID token.
@@ -135,9 +144,12 @@ the viewer never needs them locally.
   scattered strip data. Fetch **exact** strip byte ranges from the IFD's strip
   offsets/counts instead of caching blocks.
 
-### QPTIFF / multiplex IF recipe
+### QPTIFF / multiplex IF recipe (fallback for older deployments)
 
-For Akoya QPTIFF (and similar multiplex TIFFs):
+Prefer `cytario image describe` (step 3) — it reads metadata and contrast
+limits through the platform's real loaders. Hand-roll the recipe below only
+when the deployment's web app predates the describe route, for Akoya QPTIFF
+(and similar multiplex TIFFs):
 
 - **Channel keys:** each full-resolution page's `ImageDescription` carries QPI
   XML; the channel name is the `<Biomarker>` value when meaningful (the

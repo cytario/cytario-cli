@@ -13,6 +13,8 @@ Commands:
   skill list [--json]             Show detected AI tools and skill install state.
   skill install [--tool ID] ...   Install or update the packaged agent skill
                                    into the detected AI tools' directories.
+  image describe S3_URI [--host]  Print an image's metadata + contrast limits
+                                   as JSON (browser round trip, loopback result).
 
 Host selection order: --host flag, CYTARIO_HOST environment variable, the
 persisted default from the last login. The host is the cytario WEB app
@@ -39,8 +41,15 @@ import typer
 
 from . import __version__
 from .api import ApiError, list_connections, serves_cytario_api
-from .awsconfig import write_profile
+from .awsconfig import Connection, write_profile
 from .config import CliState, write_token_file
+from .imagedescribe import (
+    MIN_AGENT_DESCRIBE_WEB,
+    describe_flow,
+    match_connection,
+    parse_s3_uri,
+    probe_describe_route,
+)
 from .oidc import (
     OidcError,
     RefreshGrantError,
@@ -69,6 +78,8 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(connections_app, name="connections")
 skill_app = typer.Typer(help="Install and update the packaged agent skill.", no_args_is_help=True)
 app.add_typer(skill_app, name="skill")
+image_app = typer.Typer(help="Read image metadata through the web app.", no_args_is_help=True)
+app.add_typer(image_app, name="image")
 
 
 def _version_callback(value: bool) -> None:
@@ -441,6 +452,74 @@ def skill_install(
         else:
             verb = "written to" if result == "installed" else "updated at"
             typer.secho(f"{tool.name}: skill {verb} {destination}.", fg=typer.colors.GREEN)
+
+
+def _print_connection_candidates(connections: list[Connection]) -> None:
+    for connection in connections:
+        prefix = connection.prefix or "(none)"
+        typer.echo(
+            f"  {connection.name}  bucket={connection.bucket_name}  prefix={prefix}  "
+            f"accessLevel={connection.access_level or 'n/a'}"
+        )
+
+
+@image_app.command("describe")
+def image_describe(
+    s3_uri: Annotated[str, typer.Argument(help="Image URI, e.g. s3://bucket/prefix/slide.ome.tif")],
+    host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
+) -> None:
+    """Print an image's metadata and per-channel contrast limits as JSON.
+
+    Opens the web app's agent-describe route in the browser (under the user's
+    signed-in session — no tokens pass through the CLI) and receives the
+    computed payload on a loopback redirect.
+    """
+    parsed = parse_s3_uri(s3_uri)
+    if not parsed:
+        typer.secho(
+            f"Not an s3 URI: {s3_uri!r} — expected s3://<bucket>/<key>.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+    bucket, key = parsed
+
+    state = _load_state()
+    resolved_host = _resolve_host(host) if host else state.host
+    access_token = _fresh_access_token(state)
+    try:
+        connections = list_connections(resolved_host, access_token)
+    except ApiError as error:
+        typer.secho(str(error), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from error
+
+    result = match_connection(connections, bucket, key)
+    if not result.matches:
+        typer.secho(
+            f"No connection matches s3://{bucket}/{key}. Connections visible to you:",
+            fg=typer.colors.RED,
+        )
+        _print_connection_candidates(connections)
+        raise typer.Exit(code=1)
+    if len(result.matches) > 1:
+        typer.secho(f"s3://{bucket}/{key} matches more than one connection:", fg=typer.colors.RED)
+        _print_connection_candidates(result.matches)
+        raise typer.Exit(code=1)
+    connection = result.matches[0]
+
+    if not probe_describe_route(resolved_host):
+        typer.secho(
+            f"The web app at {resolved_host} predates the agent-describe route. "
+            f"cytario image describe requires cytario-web >= {MIN_AGENT_DESCRIBE_WEB} or newer.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        payload = describe_flow(resolved_host, connection.name, result.path, state)
+    except OidcError as error:
+        typer.secho(str(error), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from error
+    typer.echo(payload)
 
 
 @app.callback()
