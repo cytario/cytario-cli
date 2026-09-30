@@ -408,7 +408,7 @@ def skill_install(
     """Install or update the packaged agent skill into your AI tools' directories."""
     targets: list[ToolTarget]
     if path:
-        targets = [ToolTarget("custom", "Custom directory", path, False)]
+        targets = [ToolTarget("custom", "Custom directory", path, path, True)]
     else:
         targets = detect_tools()
         if tool_id:

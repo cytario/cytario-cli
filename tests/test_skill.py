@@ -17,7 +17,7 @@ from cytario_cli.skill import (
 
 def make_target(tmp_path: Path, subdir: bool = False) -> ToolTarget:
     skills_dir = tmp_path / "skills"
-    return ToolTarget("test-tool", "Test Tool", skills_dir, subdir)
+    return ToolTarget("test-tool", "Test Tool", tmp_path / "tool-home", skills_dir, subdir)
 
 
 class TestPackagedSkill:
@@ -57,7 +57,7 @@ class TestInstall:
     def test_subdir_target_nests_per_skill_directory(self, tmp_path):
         target = make_target(tmp_path, subdir=True)
         install_skill(target, packaged_skill())
-        assert skill_file(target) == tmp_path / "skills" / "cytario-cli" / "cytario-cli.md"
+        assert skill_file(target) == tmp_path / "skills" / "cytario-cli" / "SKILL.md"
         assert skill_file(target).is_file()
 
     def test_subdir_target_reuses_existing_directory(self, tmp_path):
@@ -67,13 +67,23 @@ class TestInstall:
 
 
 class TestDetect:
-    def test_detects_tool_whose_marker_directory_exists(self, tmp_path, monkeypatch):
+    def test_detects_tool_whose_config_directory_exists(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
-        (home / ".claude" / "skills").mkdir(parents=True)
+        (home / ".claude").mkdir()
         tools = detect_tools()
         assert [tool.id for tool in tools] == ["claude-code"]
+
+    def test_detects_opencode_by_config_dir(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        # Fresh OpenCode install: config dir present, no skills subdir yet.
+        (home / ".config" / "opencode").mkdir(parents=True)
+        tools = detect_tools()
+        assert [tool.id for tool in tools] == ["opencode"]
+        assert skill_file(tools[0]) == home / ".config" / "opencode" / "skills" / "cytario-cli" / "SKILL.md"
 
     def test_undetected_tools_absent(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
@@ -81,13 +91,50 @@ class TestDetect:
         monkeypatch.setattr(Path, "home", lambda: home)
         assert detect_tools() == []
 
-    def test_claude_subdir_layout(self, tmp_path, monkeypatch):
+    def test_detects_multiple_tools_in_probe_order(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
-        (home / ".claude" / "skills").mkdir(parents=True)
-        claude = detect_tools()[0]
-        assert skill_file(claude) == home / ".claude" / "skills" / "cytario-cli" / "cytario-cli.md"
+        for config in (".config/opencode", ".cursor", ".claude", ".codex"):
+            (home / config).mkdir(parents=True)
+        assert [tool.id for tool in detect_tools()] == [
+            "claude-code",
+            "opencode",
+            "codex",
+            "cursor",
+        ]
+
+
+class TestToolLayouts:
+    """Each tool's destination matches its documented discovery rules."""
+
+    def test_claude_layout(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        claude = next(tool for tool in all_tools() if tool.id == "claude-code")
+        assert skill_file(claude) == home / ".claude" / "skills" / "cytario-cli" / "SKILL.md"
+
+    def test_opencode_layout(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        opencode = next(tool for tool in all_tools() if tool.id == "opencode")
+        assert skill_file(opencode) == (home / ".config" / "opencode" / "skills" / "cytario-cli" / "SKILL.md")
+
+    def test_codex_layout(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        codex = next(tool for tool in all_tools() if tool.id == "codex")
+        assert skill_file(codex) == home / ".codex" / "skills" / "cytario-cli" / "SKILL.md"
+
+    def test_cursor_flat_rule(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        cursor = next(tool for tool in all_tools() if tool.id == "cursor")
+        assert skill_file(cursor) == home / ".cursor" / "rules" / "cytario-cli.md"
 
 
 class TestModuleTools:
@@ -96,4 +143,4 @@ class TestModuleTools:
         assert len(dirs) == len(set(dirs))
 
     def test_tool_ids_stable(self):
-        assert [tool.id for tool in all_tools()] == ["claude-code", "opencode", "cursor", "codex"]
+        assert [tool.id for tool in all_tools()] == ["claude-code", "opencode", "codex", "cursor"]
