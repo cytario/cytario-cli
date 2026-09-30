@@ -25,6 +25,7 @@ Usage:
   cytario auth login --host https://app.cytario.com
   cytario connections list --json
   cytario connections setup --all
+  cytario image describe s3://bucket/slide.ome.tif
   aws s3 ls --profile cytario-mybucket
 """
 
@@ -455,6 +456,9 @@ def skill_install(
 
 
 def _print_connection_candidates(connections: list[Connection]) -> None:
+    if not connections:
+        typer.echo("No connections visible to you.")
+        return
     for connection in connections:
         prefix = connection.prefix or "(none)"
         typer.echo(
@@ -509,13 +513,22 @@ def image_describe(
     if not probe_describe_route(resolved_host):
         typer.secho(
             f"The web app at {resolved_host} predates the agent-describe route. "
-            f"cytario image describe requires cytario-web >= {MIN_AGENT_DESCRIBE_WEB} or newer.",
+            f"cytario image describe requires cytario-web >= {MIN_AGENT_DESCRIBE_WEB}.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    if not connection.id:
+        typer.secho(
+            f"The web app at {resolved_host} predates the connection-id field "
+            "(its /api/me/connections response carries no id). "
+            f"cytario image describe requires cytario-web >= {MIN_AGENT_DESCRIBE_WEB}.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
 
     try:
-        payload = describe_flow(resolved_host, connection.id or connection.name, result.path, state)
+        payload = describe_flow(resolved_host, connection.id, result.path)
     except OidcError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error

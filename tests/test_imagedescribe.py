@@ -78,6 +78,23 @@ class TestMatchConnection:
         result = match_connection(CONNECTIONS, "shared-bucket", "other/x.tif")
         assert [c.name for c in result.matches] == ["Root"]
 
+    def test_prefix_without_slash_does_not_match_sibling_prefix(self):
+        slides = connection("Slides2", "shared-bucket", "slides")
+        result = match_connection([slides], "shared-bucket", "slides2/x.tif")
+        assert result.matches == []
+
+    def test_prefix_with_slash_matches_under_it(self):
+        slides = connection("Slides", "shared-bucket", "slides/")
+        result = match_connection([slides], "shared-bucket", "slides/x.tif")
+        assert [c.name for c in result.matches] == ["Slides"]
+        assert result.path == "x.tif"
+
+    def test_exact_key_equals_prefix_matches(self):
+        slides = connection("Slides", "shared-bucket", "slides/x.tif")
+        result = match_connection([slides], "shared-bucket", "slides/x.tif")
+        assert [c.name for c in result.matches] == ["Slides"]
+        assert result.path == ""
+
 
 class TestProbeDescribeRoute:
     @respx.mock
@@ -100,6 +117,29 @@ class TestProbeDescribeRoute:
         respx.get(f"{HOST}/agent/describe").mock(side_effect=httpx.ConnectError("no"))
         assert probe_describe_route(HOST) is False
 
+    @respx.mock
+    def test_json_4xx_means_route_present(self):
+        respx.get(f"{HOST}/agent/describe").respond(status_code=401, json={"detail": "unauthorized"})
+        assert probe_describe_route(HOST) is True
+
+    @respx.mock
+    def test_scheme_upgrade_then_html_means_old_deployment(self):
+        route = respx.get("http://app.example.com/agent/describe").respond(
+            status_code=301, headers={"Location": f"{HOST}/agent/describe?probe"}
+        )
+        respx.get(f"{HOST}/agent/describe").respond(status_code=200, html="<html></html>")
+        assert probe_describe_route("http://app.example.com") is False
+        assert route.called
+
+    @respx.mock
+    def test_scheme_upgrade_then_login_redirect_means_route_present(self):
+        route = respx.get("http://app.example.com/agent/describe").respond(
+            status_code=301, headers={"Location": f"{HOST}/agent/describe?probe"}
+        )
+        respx.get(f"{HOST}/agent/describe").respond(status_code=302, headers={"Location": f"{HOST}/login"})
+        assert probe_describe_route("http://app.example.com") is True
+        assert route.called
+
 
 class TestDescribeFlow:
     def test_pretty_prints_payload(self, monkeypatch, capsys):
@@ -109,7 +149,7 @@ class TestDescribeFlow:
         monkeypatch.setattr(LoopbackReceiver, "wait_ready", lambda self: 12345)
         monkeypatch.setattr(LoopbackReceiver, "wait_for_code", lambda self: {"payload": json.dumps(payload)})
 
-        output = imagedescribe.describe_flow(HOST, "Slides", "a.tif", state=None)
+        output = imagedescribe.describe_flow(HOST, "Slides", "a.tif")
 
         assert json.loads(output) == payload
         assert output.endswith("}")
@@ -122,7 +162,7 @@ class TestDescribeFlow:
         monkeypatch.setattr(LoopbackReceiver, "wait_for_code", lambda self: {"error": "boom"})
 
         with pytest.raises(oidc.OidcError, match="boom"):
-            imagedescribe.describe_flow(HOST, "Slides", "a.tif", state=None)
+            imagedescribe.describe_flow(HOST, "Slides", "a.tif")
 
     def test_no_browser_fallback_prints_forwarding_hint(self, monkeypatch, capsys):
         monkeypatch.setattr(imagedescribe.webbrowser, "open", lambda url: False)
@@ -130,7 +170,7 @@ class TestDescribeFlow:
         monkeypatch.setattr(LoopbackReceiver, "wait_ready", lambda self: 54321)
         monkeypatch.setattr(LoopbackReceiver, "wait_for_code", lambda self: {"payload": "{}"})
 
-        imagedescribe.describe_flow(HOST, "Slides", "a.tif", state=None)
+        imagedescribe.describe_flow(HOST, "Slides", "a.tif")
 
         output = capsys.readouterr().out
         assert "No browser available" in output
@@ -143,7 +183,7 @@ class TestDescribeFlow:
         monkeypatch.setattr(LoopbackReceiver, "wait_ready", lambda self: 12345)
         monkeypatch.setattr(LoopbackReceiver, "wait_for_code", lambda self: {"payload": "{}"})
 
-        imagedescribe.describe_flow(HOST, "Slides", "a b.tif", state=None)
+        imagedescribe.describe_flow(HOST, "Slides", "a b.tif")
 
         assert seen["url"] == f"{HOST}/agent/describe?connectionId=Slides&path=a+b.tif&port=12345"
 
@@ -400,3 +440,32 @@ class TestImageDescribeCommand:
 
         assert result.exit_code == 1
         assert "The result redirect never arrived." in result.output
+
+    @respx.mock
+    def test_missing_connection_id_fails_loudly(self, patched_state, monkeypatch):
+        respx.get(f"{HOST}/api/me/connections").respond(
+            json={
+                "connections": [
+                    {
+                        "name": "Slides",
+                        "bucketName": "b",
+                        "prefix": "p/",
+                        "region": "eu-central-1",
+                        "s3Endpoint": "https://s3.example.com",
+                        "stsEndpoint": "https://sts.example.com",
+                        "roleArn": None,
+                        "accessLevel": "read-only",
+                    }
+                ]
+            }
+        )
+        respx.get(f"{HOST}/agent/describe").respond(status_code=302, headers={"Location": f"{HOST}/login"})
+        opened: list[str] = []
+        monkeypatch.setattr(imagedescribe.webbrowser, "open", lambda url: opened.append(url) or True)
+
+        result = runner.invoke(cli.app, ["image", "describe", "s3://b/p/a.tif", "--host", HOST])
+
+        assert result.exit_code == 1
+        assert "predates the connection-id field" in result.output
+        assert imagedescribe.MIN_AGENT_DESCRIBE_WEB in result.output
+        assert opened == []

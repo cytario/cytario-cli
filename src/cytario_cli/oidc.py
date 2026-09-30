@@ -39,8 +39,7 @@ REDIRECT_STATUS = (301, 302, 303, 307, 308)
 
 AUTH_PATH_MARKER = "/protocol/openid-connect/auth"
 
-DESCRIBE_DONE_TITLE = "Describe complete"
-DESCRIBE_DONE_MESSAGE = "Describe complete — you can close this tab."
+RECEIVER_TIMEOUT = "receiver-timeout"
 
 
 @dataclass
@@ -57,6 +56,8 @@ class OidcError(Exception):
 
 
 HTTP_OK = 200
+
+RECV_BUFFER_LIMIT = 65536
 
 
 def _b64url(data: bytes) -> str:
@@ -153,7 +154,6 @@ class LoopbackReceiver:
         done_message: str = "Sign-in complete. You can close this window.",
     ) -> None:
         """Bind nothing yet; the socket is created on the serve thread."""
-        self._done_title = done_title
         self._done_body = (
             f"<html><head><title>{done_title}</title></head>"
             f"<body><p>{done_message}</p></body></html>".encode()
@@ -172,11 +172,20 @@ class LoopbackReceiver:
         server_socket.settimeout(300)
         try:
             connection, _ = server_socket.accept()
-        except (TimeoutError, OSError) as error:
-            self._result = {"error": str(error)}
+        except (TimeoutError, OSError):
+            self._result = {"error": RECEIVER_TIMEOUT}
             return
         with connection:
-            request = connection.recv(65536).decode("utf-8", errors="replace")
+            buffer = bytearray()
+            while b"\r\n\r\n" not in buffer and len(buffer) < RECV_BUFFER_LIMIT:
+                try:
+                    chunk = connection.recv(RECV_BUFFER_LIMIT - len(buffer))
+                except (TimeoutError, OSError):
+                    break
+                if not chunk:
+                    break
+                buffer += chunk
+            request = bytes(buffer).decode("utf-8", errors="replace")
             path = request.split(" ")[1] if " " in request else "/"
             query = parse_qs(urlparse(path).query)
             self._result = {key: values[0] for key, values in query.items()}
