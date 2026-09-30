@@ -39,11 +39,12 @@ installed CLI version):
 cytario skill install
 ```
 
-The command probes the well-known skills directories of common AI tools
-(Claude Code, OpenCode, Cursor, Codex CLI), shows what it found, and writes
-the skill there. Re-running it after a CLI update refreshes stale copies
-(a locally modified copy is never overwritten without `--force`). Useful
-variations:
+The command probes the config directories of common AI tools (Claude Code,
+OpenCode, Cursor, Codex CLI) and writes the skill where each tool discovers
+it: `<skills>/cytario-cli/SKILL.md` for Claude Code, OpenCode, and Codex CLI
+(per-skill directory convention), a flat rule file for Cursor. Re-running it
+after a CLI update refreshes stale copies (a locally modified copy is never
+overwritten without `--force`). Useful variations:
 
 ```bash
 cytario skill list --json   # what is detected, and the install state

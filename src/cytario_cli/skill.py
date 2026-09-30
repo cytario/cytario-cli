@@ -4,6 +4,15 @@ The skill file ships inside the package (cytario_cli/skills/cytario-cli.md)
 so the installed CLI always carries the matching skill version — installing
 never fetches anything over the network, and re-running install after a CLI
 update refreshes stale copies.
+
+Layout per tool (each tool's own discovery rules):
+  Claude Code, OpenCode, Codex CLI: <skills>/cytario-cli/SKILL.md — a
+    per-skill directory with SKILL.md inside; all three scan that shape.
+  Cursor: ~/.cursor/rules/cytario-cli.md — rules are flat markdown files.
+
+A tool counts as present when its CONFIG directory exists (~/.claude,
+~/.config/opencode, …), not its skills subdirectory — the skills dir does
+not exist on a fresh tool install.
 """
 
 from __future__ import annotations
@@ -22,25 +31,29 @@ class ToolTarget:
 
     id: str
     name: str
+    config_dir: Path  # presence marker: the tool's config directory
     skills_dir: Path
-    install_subdir: bool  # nest the file in a per-skill directory
+    install_subdir: bool  # nest the file in a per-skill directory (SKILL.md)
 
 
-# Probed in order; a tool counts as present when its directory marker exists.
-# User-level (home) locations only — the CLI never writes into a project repo.
-# Tool ids are stable — agents pass them to `skill install --tool`.
-_TOOL_IDS: tuple[tuple[str, str, str, bool], ...] = (
-    ("claude-code", "Claude Code", ".claude/skills", True),
-    ("opencode", "OpenCode", ".config/opencode/skill", False),
-    ("cursor", "Cursor", ".cursor/rules", False),
-    ("codex", "Codex CLI", ".codex/skills", False),
+# Probed in order. User-level (home) locations only — the CLI never writes
+# into a project repo. Tool ids are stable — agents pass them to
+# `skill install --tool`.
+_TOOL_SPECS: tuple[tuple[str, str, str, str, bool], ...] = (
+    ("claude-code", "Claude Code", ".claude", ".claude/skills", True),
+    ("opencode", "OpenCode", ".config/opencode", ".config/opencode/skills", True),
+    ("codex", "Codex CLI", ".codex", ".codex/skills", True),
+    ("cursor", "Cursor", ".cursor", ".cursor/rules", False),
 )
 
 
 def all_tools() -> list[ToolTarget]:
     """Return every known tool target; presence is decided by detect_tools()."""
     home = Path.home()
-    return [ToolTarget(tool_id, name, home / rel_dir, subdir) for tool_id, name, rel_dir, subdir in _TOOL_IDS]
+    return [
+        ToolTarget(tool_id, name, home / config_dir, home / skills_dir, subdir)
+        for tool_id, name, config_dir, skills_dir, subdir in _TOOL_SPECS
+    ]
 
 
 def packaged_skill() -> str:
@@ -51,13 +64,13 @@ def packaged_skill() -> str:
 def skill_file(tool: ToolTarget) -> Path:
     """Return the destination path of the skill file for one tool."""
     if tool.install_subdir:
-        return tool.skills_dir / "cytario-cli" / SKILL_FILENAME
+        return tool.skills_dir / "cytario-cli" / "SKILL.md"
     return tool.skills_dir / SKILL_FILENAME
 
 
 def detect_tools() -> list[ToolTarget]:
-    """Return the tools whose marker directories exist, in probe order."""
-    return [tool for tool in all_tools() if tool.skills_dir.is_dir()]
+    """Return the tools whose config directories exist, in probe order."""
+    return [tool for tool in all_tools() if tool.config_dir.is_dir()]
 
 
 def install_status(tool: ToolTarget, packaged: str) -> str:
