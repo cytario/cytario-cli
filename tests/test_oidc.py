@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import base64
+import socket
 import time
 
 import httpx
 import pytest
 import respx
 
-from cytario_cli.oidc import Discovery, discover, id_token_claims, id_token_expiry, token_is_fresh
+from cytario_cli.oidc import (
+    Discovery,
+    LoopbackReceiver,
+    discover,
+    id_token_claims,
+    id_token_expiry,
+    token_is_fresh,
+)
 
 
 def _b64url(data: bytes) -> str:
@@ -54,6 +62,32 @@ class TestIdTokenExpiry:
         soon = time.time() + 200  # under the 300s default skew
         assert not token_is_fresh(make_id_token(exp=soon))
         assert not token_is_fresh(make_id_token(exp=time.time() - 10))
+
+
+class TestLoopbackReceiverSocket:
+    def test_fragmented_request_is_parsed_and_served(self):
+        receiver = LoopbackReceiver()
+        receiver.start()
+        port = receiver.wait_ready()
+
+        client = socket.create_connection(("127.0.0.1", port), timeout=5)
+        client.sendall(b"GET /?code=the-auth-code&state=abc")
+        time.sleep(0.1)
+        client.sendall(b" HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+
+        result = receiver.wait_for_code()
+        assert result == {"code": "the-auth-code", "state": "abc"}
+
+        chunks = bytearray()
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks += chunk
+        client.close()
+        response = bytes(chunks)
+        assert response.startswith(b"HTTP/1.1 200 OK")
+        assert b"Sign-in complete. You can close this window." in response
 
 
 class TestDiscover:

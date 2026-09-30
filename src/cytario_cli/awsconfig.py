@@ -30,12 +30,14 @@ class Connection:
     sts_endpoint: str
     role_arn: str | None
     access_level: str | None
+    id: str | None = None
 
     @classmethod
     def from_api(cls, payload: dict) -> Connection:
         """Build one from a /api/me/connections row."""
         return cls(
             name=payload["name"],
+            id=payload.get("id"),
             bucket_name=payload["bucketName"],
             prefix=payload.get("prefix", ""),
             region=payload["region"],

@@ -109,6 +109,9 @@ ignore = [
 "src/cytario_cli/oidc.py" = [
   "T201",  # the login flow prints interactive guidance (no typer in this layer)
 ]
+"src/cytario_cli/imagedescribe.py" = [
+  "T201",  # the describe flow prints interactive guidance (no typer in this layer)
+]
 "tests/*" = [
   "ARG001",  # fixtures are requested for their side effects
   "ARG002",  # fixture-backed test methods take the state they set up
