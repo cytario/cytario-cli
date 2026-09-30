@@ -17,6 +17,10 @@ with connection data using the workstation's standard AWS tooling.
   `web_identity_token_file`, so `aws` / boto3 / pandas perform
   `AssumeRoleWithWebIdentity` themselves — with exactly your grant's
   authorization, never wider.
+- **`cytario auth status [--json]`** — the signed-in host, user (Keycloak
+  `sub`, email, name), and token state; `--json` emits it machine-readable
+  (agents need the `sub` to address per-user files such as
+  `settings.<sub>.json` view presets).
 - **`cytario auth token` / `cytario auth refresh`** — a fresh ID token on
   stdout, and a rewrite of all managed token files (tokens live ~1 hour).
 

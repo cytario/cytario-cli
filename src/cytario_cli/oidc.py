@@ -65,13 +65,21 @@ def _b64url_decode(segment: str) -> bytes:
     return base64.urlsafe_b64decode(segment + padding)
 
 
+def id_token_claims(id_token: str) -> dict:
+    """Decode a JWT's payload segment as a dict ({} when unparsable)."""
+    try:
+        payload_segment = id_token.split(".")[1]
+        claims = json.loads(_b64url_decode(payload_segment))
+    except (IndexError, ValueError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
 def id_token_expiry(id_token: str) -> float:
     """Return the `exp` claim of a JWT as epoch seconds (0 when unparsable)."""
     try:
-        payload_segment = id_token.split(".")[1]
-        payload = json.loads(_b64url_decode(payload_segment))
-        return float(payload.get("exp", 0))
-    except (IndexError, ValueError):
+        return float(id_token_claims(id_token).get("exp", 0))
+    except (TypeError, ValueError):
         return 0.0
 
 
