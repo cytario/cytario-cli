@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from cytario_cli.oidc import Discovery, discover, id_token_expiry, token_is_fresh
+from cytario_cli.oidc import Discovery, discover, id_token_claims, id_token_expiry, token_is_fresh
 
 
 def _b64url(data: bytes) -> str:
@@ -20,6 +20,23 @@ def make_id_token(exp: float, sub: str = "user-1") -> str:
     header = _b64url(b'{"alg":"RS256"}')
     payload = _b64url(f'{{"sub":"{sub}","exp":{exp}}}'.encode())
     return f"{header}.{payload}.{_b64url(b'signature')}"
+
+
+class TestIdTokenClaims:
+    def test_decodes_payload_as_dict(self):
+        token = make_id_token(exp=2000000000, sub="user-9")
+        claims = id_token_claims(token)
+        assert claims["sub"] == "user-9"
+        assert claims["exp"] == 2000000000
+
+    def test_returns_empty_dict_on_garbage(self):
+        assert id_token_claims("not-a-jwt") == {}
+        assert id_token_claims("") == {}
+
+    def test_returns_empty_dict_on_non_object_payload(self):
+        header = _b64url(b'{"alg":"RS256"}')
+        payload = _b64url(b"[1, 2, 3]")
+        assert id_token_claims(f"{header}.{payload}.{_b64url(b'signature')}") == {}
 
 
 class TestIdTokenExpiry:

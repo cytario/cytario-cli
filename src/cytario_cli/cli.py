@@ -6,7 +6,8 @@ Commands:
                                    user-private.
   auth token                       Print a fresh ID token (for scripts and agents).
   auth refresh                     Refresh all managed token files.
-  auth status                      Show the signed-in host and token state.
+  auth status [--json]             Show the signed-in host, user (Keycloak sub),
+                                   and token state.
   connections list [--json]       List the user's connections with their grants.
   connections setup [--all | NAME] Write AWS CLI profiles + token files.
 
@@ -40,6 +41,7 @@ from .oidc import (
     OidcError,
     RefreshGrantError,
     discover,
+    id_token_claims,
     id_token_expiry,
     login_flow,
     refresh_token,
@@ -210,15 +212,41 @@ def _refresh_token_files(host: str, access_token: str, id_token: str) -> None:
 
 
 @auth_app.command("status")
-def auth_status() -> None:
-    """Show the signed-in host and token state."""
+def auth_status(
+    as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
+) -> None:
+    """Show the signed-in host, user, and token state."""
     state = CliState.load()
     if not state:
-        typer.echo("Not signed in.")
+        if as_json:
+            typer.echo(json_module.dumps({"signedIn": False}, indent=2))
+        else:
+            typer.echo("Not signed in.")
         return
+    claims = id_token_claims(state.id_token) if state.id_token else {}
     remaining = state.id_token_expires_at - time.time() if state.id_token_expires_at else 0
+    if as_json:
+        typer.echo(
+            json_module.dumps(
+                {
+                    "signedIn": True,
+                    "host": state.host,
+                    "issuer": state.issuer,
+                    "userId": claims.get("sub"),
+                    "email": claims.get("email"),
+                    "name": claims.get("name"),
+                    "idTokenExpiresIn": max(remaining, 0),
+                },
+                indent=2,
+            )
+        )
+        return
     typer.echo(f"Host: {state.host}")
     typer.echo(f"Issuer: {state.issuer}")
+    if claims.get("email"):
+        typer.echo(f"Signed in as: {claims['email']}")
+    elif claims.get("sub"):
+        typer.echo(f"Signed in as: {claims['sub']}")
     typer.echo(f"ID token expires in: {max(remaining, 0):.0f}s" if state.id_token else "No ID token cached")
 
 

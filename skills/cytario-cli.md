@@ -28,7 +28,10 @@ workstation's standard AWS tooling — never with the user's browser credentials
    authorization URL plus the loopback port instead — the user must forward
    that port to a device with a browser (e.g. `ssh -L <port>:127.0.0.1:<port>`)
    and open the URL there. If the user has recently
-   signed in on this machine, check first with `cytario auth status`.
+   signed in on this machine, check first with `cytario auth status --json` —
+   it returns the signed-in user's Keycloak `sub` (`userId`), `email`, and
+   `name`. You need that `sub` before touching any `settings.*.json` sidecar
+   (see "View settings" below).
 2. **Discover the data:** `cytario connections list --json` returns every
    connection visible to the user with bucket, prefix, region, endpoints, and the
    user's access level (`read-only`, `annotate`, `read-write`, `admin`).
@@ -68,11 +71,30 @@ all sets of an image with `*.annotations.*.json`.
 ### View settings — `settings.<userId>.json`
 
 Per **directory**, not per image: `settings.<owner>.json` in the image's
-directory, one file per user, holding that user's **shared** view presets
-(channel colors/contrast, opacity, overlay configurations) as JSON with a
-`cytario` envelope (`schemaVersion: "1.1"`, `kind: "settings"`, `author`).
-The live working state is browser-local and never written to S3; read-only
-connections write no settings at all. Glob with `settings.*.json`.
+directory, one file **per user** — the `<userId>` segment is the owner's
+Keycloak `sub`, and a directory can hold **other users'** settings files (their
+shared view presets), not just the current user's. Each file holds that user's
+**shared** view presets (channel colors/contrast, opacity, overlay
+configurations) as JSON with a `cytario` envelope (`schemaVersion: "1.1"`,
+`kind: "settings"`, `author` — the owner's `sub`). The live working state is
+browser-local and never written to S3; read-only connections write no settings
+at all. Glob with `settings.*.json`.
+
+The viewer supports **at most 10 active channels at the same time** — never
+author a preset with more, it renders a black canvas.
+
+When writing view presets:
+
+1. Resolve the current user's `sub` first (`cytario auth status --json` →
+   `userId`) and write to `settings.<sub>.json` with `author: <sub>`.
+2. **Never assume an existing settings file is the user's** — match its
+   filename against the current `sub` before writing; on a mismatch it is
+   someone else's shared views.
+3. A view written into another user's file is misattributed: the viewer
+   treats it as foreign and forks it on edit. If you discover you wrote into
+   the wrong file, restore the original.
+4. When editing any shared sidecar, keep the other users' views
+   byte-identical — touch only the entries you mean to change.
 
 ### Analysis results — user-chosen output prefix, many shapes
 
@@ -96,8 +118,48 @@ optional `resources`. Saving them through the web app needs `read-write` or
 container env vars (`CYTARIO_PARAMETERS`, `CYTARIO_OUTPUT_URI`), not as bucket
 files.
 
+## Reading image data efficiently (range reads, never bulk downloads)
+
+Whole-slide and multiplex images are **multi-GB**; their bytes live in S3 and
+the viewer never needs them locally.
+
+- **Never bulk-download image data (`s3 cp` of an image) unless the user
+  explicitly asks for the file.** Reading pixels or metadata remotely via HTTP
+  range requests is the intended workflow: `boto3`
+  `get_object(Range="bytes=<start>-<end>")` on the profile session (or
+  `aws s3api get-object --range ...`).
+- Sidecars, READMEs, annotation sets, settings, job configs, and tabular
+  results (KB–MB) are fair game for `s3 cp`.
+- TIFF strips are **scattered across the file** — a block-cached range reader
+  (fetching aligned blocks around each request) re-reads massively for
+  scattered strip data. Fetch **exact** strip byte ranges from the IFD's strip
+  offsets/counts instead of caching blocks.
+
+### QPTIFF / multiplex IF recipe
+
+For Akoya QPTIFF (and similar multiplex TIFFs):
+
+- **Channel keys:** each full-resolution page's `ImageDescription` carries QPI
+  XML; the channel name is the `<Biomarker>` value when meaningful (the
+  biological marker — this is the channel key), falling back to `<Name>` (the
+  fluorophore/filter, e.g. DAPI, Cy5); placeholders (`--`, `none`, `n/a`) are
+  skipped. `<Name>` differing from the channel name is the `Fluor`; `<Color>`
+  is `R,G,B` 0–255. This must match `qptiff-loader/src/metadata/mapChannels.ts`.
+- **Channel name collisions:** duplicates get a " (n)" suffix in first-seen
+  order (`DAPI`, `DAPI (2)`).
+- **Page layout:** N full-resolution channels first, then the label image,
+  then the pyramid (downsampled) levels in channel order, **smallest level
+  last**. Read the last page for per-channel statistics.
+- **Contrast limits:** the app's tuned per-channel display limits track the
+  **p99.9 of the smallest pyramid level** — that's the auto-contrast recipe
+  when authoring view presets.
+- **Check for a `<image>.README.txt` companion first** — Akoya exports often
+  carry the panel story (marker list, fluorophores, cycle structure) there.
+
 ## Rules
 
+- **Data-transfer etiquette:** never bulk-download image data unless
+  explicitly asked; use range reads (see above).
 - **You act as the user, with exactly their grant.** A `read-only` connection
   cannot be written to; `annotate` permits annotation and settings sidecar
   writes only; `read-write`/`admin` cover the connection's whole prefix.
