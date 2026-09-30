@@ -20,9 +20,10 @@ runner = CliRunner()
 HOST = "https://app.example.com"
 
 
-def connection(name: str, bucket: str, prefix: str) -> Connection:
+def connection(name: str, bucket: str, prefix: str, conn_id: str | None = None) -> Connection:
     return Connection(
         name=name,
+        id=conn_id or f"conn-{name.lower()}",
         bucket_name=bucket,
         prefix=prefix,
         region="eu-central-1",
@@ -212,6 +213,7 @@ class TestImageDescribeCommand:
             json={
                 "connections": [
                     {
+                        "id": "conn-root",
                         "name": "Root",
                         "bucketName": "shared-bucket",
                         "prefix": "",
@@ -222,6 +224,7 @@ class TestImageDescribeCommand:
                         "accessLevel": "read-only",
                     },
                     {
+                        "id": "conn-slides",
                         "name": "Slides",
                         "bucketName": "shared-bucket",
                         "prefix": "slides/",
@@ -249,6 +252,7 @@ class TestImageDescribeCommand:
             json={
                 "connections": [
                     {
+                        "id": "conn-slides",
                         "name": "Slides",
                         "bucketName": "b",
                         "prefix": "p/",
@@ -274,6 +278,7 @@ class TestImageDescribeCommand:
             json={
                 "connections": [
                     {
+                        "id": "conn-slides",
                         "name": "Slides",
                         "bucketName": "b",
                         "prefix": "p/",
@@ -299,11 +304,46 @@ class TestImageDescribeCommand:
         assert "\n" in result.output.strip()
 
     @respx.mock
+    def test_browser_url_carries_connection_id_not_name(self, patched_state, monkeypatch):
+        respx.get(f"{HOST}/api/me/connections").respond(
+            json={
+                "connections": [
+                    {
+                        "id": "conn-slides",
+                        "name": "Slides",
+                        "bucketName": "b",
+                        "prefix": "p/",
+                        "region": "eu-central-1",
+                        "s3Endpoint": "https://s3.example.com",
+                        "stsEndpoint": "https://s3.example.com",
+                        "roleArn": None,
+                        "accessLevel": "read-only",
+                    }
+                ]
+            }
+        )
+        respx.get(f"{HOST}/agent/describe").respond(status_code=302, headers={"Location": f"{HOST}/login"})
+        opened: list[str] = []
+
+        monkeypatch.setattr(imagedescribe.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(LoopbackReceiver, "start", lambda self: None)
+        monkeypatch.setattr(LoopbackReceiver, "wait_ready", lambda self: 12345)
+        monkeypatch.setattr(LoopbackReceiver, "wait_for_code", lambda self: {"payload": "{}"})
+
+        result = runner.invoke(cli.app, ["image", "describe", "s3://b/p/a.tif", "--host", HOST])
+
+        assert result.exit_code == 0, result.output
+        assert len(opened) == 1
+        assert "connectionId=conn-slides" in opened[0]
+        assert "Slides" not in opened[0]
+
+    @respx.mock
     def test_error_param_exits_one(self, patched_state, monkeypatch):
         respx.get(f"{HOST}/api/me/connections").respond(
             json={
                 "connections": [
                     {
+                        "id": "conn-slides",
                         "name": "Slides",
                         "bucketName": "b",
                         "prefix": "p/",
@@ -333,6 +373,7 @@ class TestImageDescribeCommand:
             json={
                 "connections": [
                     {
+                        "id": "conn-slides",
                         "name": "Slides",
                         "bucketName": "b",
                         "prefix": "p/",

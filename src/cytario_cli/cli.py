@@ -515,7 +515,7 @@ def image_describe(
         raise typer.Exit(code=1)
 
     try:
-        payload = describe_flow(resolved_host, connection.name, result.path, state)
+        payload = describe_flow(resolved_host, connection.id or connection.name, result.path, state)
     except OidcError as error:
         typer.secho(str(error), fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
