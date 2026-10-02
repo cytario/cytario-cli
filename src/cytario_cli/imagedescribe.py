@@ -11,6 +11,7 @@ talks to storage directly with its session's credentials.
 from __future__ import annotations
 
 import json
+import sys
 import webbrowser
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -157,15 +158,17 @@ def describe_flow(host: str, connection_id: str, path: str) -> str:
     url = describe_url(host, connection_id, path, port)
     opened = webbrowser.open(url)
     if not opened:
-        print("No browser available on this machine.")
-        print()
-        print("1. Forward this machine's loopback port to a device with a browser, e.g.:")
-        print(f"   ssh -L {port}:127.0.0.1:{port} <this-host>")
-        print("2. Then open this URL there:")
-        print()
-        print(url)
-        print()
-        print(f"Waiting for the result redirect on 127.0.0.1:{port} ... (Ctrl+C to cancel)")
+        # Instructions for the human at the terminal — stderr, so a redirected
+        # `cytario image describe > describe.json` captures only the JSON.
+        print("No browser available on this machine.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("1. Forward this machine's loopback port to a device with a browser, e.g.:", file=sys.stderr)
+        print(f"   ssh -L {port}:127.0.0.1:{port} <this-host>", file=sys.stderr)
+        print("2. Then open this URL there:", file=sys.stderr)
+        print(file=sys.stderr)
+        print(url, file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"Waiting for the result redirect on 127.0.0.1:{port} ... (Ctrl+C to cancel)", file=sys.stderr)
 
     try:
         result = receiver.wait_for_code()

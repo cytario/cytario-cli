@@ -44,6 +44,14 @@ workstation's standard AWS tooling — never with the user's browser credentials
    and contrast values, because it uses the platform's own loaders and
    auto-contrast recipe. On a deployment whose web app predates the route
    the command says so and exits; fall back to the hand-rolled recipe below.
+   The command is **expensive** — a browser round trip through the web app
+   plus a possible token refresh — and its output is often needed by both
+   you and a script (e.g. generating view presets). **Redirect the first
+   call to a file** (`cytario image describe s3://… > describe.json`), then
+   read the file for yourself and have the script parse it — never re-run
+   the command for a second consumer, and never hand-transcribe channel
+   tables into code. Status messages (token refresh, no-browser hints) go
+   to stderr, so the redirected file is pure JSON.
 4. **Configure AWS profiles:** `cytario connections setup --all` (or with a
    connection name) writes one AWS CLI profile per connection
    (`~/.aws/config`, `[profile cytario-<name>]`) plus token files under
@@ -174,6 +182,32 @@ Minimal example (one view, two channels):
   ]
 }
 ```
+
+#### Generating views programmatically (one pass, one script)
+
+When a script will consume a command's output — e.g. `image describe`
+for channel keys, contrast limits, and colors when authoring view
+presets — redirect the **first** invocation to a file:
+
+```bash
+cytario image describe s3://<bucket>/<key> > describe.json
+```
+
+then read the file yourself. Never re-run an expensive command to feed
+a second consumer; the describe route round-trips through the web app's
+describe page, a loopback redirect, and possibly a token refresh — it
+is not a cheap call. Status lines (`Refreshing tokens...`, no-browser
+forwarding hints) go to stderr, so the redirected file is pure JSON;
+still, have the generator script parse it defensively (strip to the
+first `{`) rather than running a separate cleanup invocation.
+
+One script, one invocation: the generator builds the document, then
+**asserts its own output** before writing — `schemaVersion` is `"1.2"`,
+`author` matches the filename segment, every view has ≤10
+`isVisible: true` channels, colors are numeric RGB triples, view ids
+are unique UUIDs — and prints a one-line summary per view. Extra
+`python3 -c` validation round-trips cost a permission prompt each;
+asserts belong inside the script next to the data they check.
 
 #### Naming views
 
