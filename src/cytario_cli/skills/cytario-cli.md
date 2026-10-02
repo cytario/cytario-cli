@@ -82,15 +82,11 @@ all sets of an image with `*.annotations.*.json`.
 Per **directory**, not per image: `settings.<owner>.json` in the image's
 directory, one file **per user** — the `<userId>` segment is the owner's
 Keycloak `sub`, and a directory can hold **other users'** settings files (their
-shared view presets), not just the current user's. Each file holds that user's
-**shared** view presets (channel colors/contrast, opacity, overlay
-configurations) as JSON with a `cytario` envelope (`schemaVersion: "1.1"`,
-`kind: "settings"`, `author` — the owner's `sub`). The live working state is
+shared view presets), not just the current user's. Each file holds that
+user's **shared** view presets (channel visibility/colors/contrast, opacities,
+outline toggles) as JSON with a `cytario` envelope. The live working state is
 browser-local and never written to S3; read-only connections write no settings
 at all. Glob with `settings.*.json`.
-
-The viewer supports **at most 10 active channels at the same time** — never
-author a preset with more, it renders a black canvas.
 
 When writing view presets:
 
@@ -104,6 +100,89 @@ When writing view presets:
    the wrong file, restore the original.
 4. When editing any shared sidecar, keep the other users' views
    byte-identical — touch only the entries you mean to change.
+
+#### Settings-file schema
+
+Generate settings files from this schema — do **not** copy a settings file
+found somewhere in the bucket as a template: older files can carry an older
+`schemaVersion` or fields the current viewer discards. The reader accepts
+`schemaVersion` `"1.0"`, `"1.1"`, and `"1.2"`; **always write `"1.2"`**.
+Overlay state stopped being persisted in 1.2 (it is machine-local now), so a
+hand-authored file contains no overlay fields; unknown keys are stripped on
+load.
+
+The document is a JSON object with exactly two top-level keys:
+
+- `cytario` — the envelope: `schemaVersion: "1.2"`, `kind: "settings"`,
+  `image` (string — the s3Uri of any image in the directory; it identifies
+  the directory, not one specific image), `author` (string — the owner's
+  `sub`, identical to the filename segment).
+- `views` — array of the owner's shared views. The whole file is rewritten
+  on each save, so when editing an existing file carry every existing view
+  forward unchanged.
+
+Each element of `views`:
+
+- `id` — string, UUID, unique within the file.
+- `author` — string — the owner's `sub`.
+- `name` — string, optional; omit the key entirely when the view has no
+  name (never write `null`).
+- `shared` — boolean; shared views are the only ones persisted to S3, so
+  write `true`.
+- `channels` — object keyed by the image's **channel keys** (the channel
+  names from `cytario image describe`), each value:
+  - `isVisible` — boolean, optional;
+  - `contrastLimits` — `[min, max]` numbers, optional — the channel's
+    display intensity domain; take real values from `cytario image
+    describe` (or the contrast recipe below) rather than guessing;
+  - `color` — `[r, g, b]` numbers 0–255, optional — a **numeric RGB
+    triple, never a hex string**.
+- `channelsOpacity` — number, 0–1 (default 1).
+- `showCellOutline` — boolean (default true).
+- `annotationsOpacity` — number, 0–1 (default 1).
+- `showAnnotationOutline` — boolean (default true).
+
+The viewer supports **at most 10 active channels at the same time** — never
+author a preset with more than 10 `isVisible: true` channels, it renders a
+black canvas.
+
+Minimal example (one view, two channels):
+
+```json
+{
+  "cytario": {
+    "schemaVersion": "1.2",
+    "kind": "settings",
+    "image": "s3://bucket/data/slide.ome.tif",
+    "author": "3f8a1b2c-…-keycloak-sub"
+  },
+  "views": [
+    {
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "author": "3f8a1b2c-…-keycloak-sub",
+      "name": "Tumor microenvironment",
+      "shared": true,
+      "channels": {
+        "DAPI": { "isVisible": true, "contrastLimits": [0, 65535], "color": [0, 114, 189] },
+        "CD8": { "isVisible": true, "contrastLimits": [100, 3000], "color": [237, 28, 36] }
+      },
+      "channelsOpacity": 1,
+      "showCellOutline": true,
+      "annotationsOpacity": 1,
+      "showAnnotationOutline": true
+    }
+  ]
+}
+```
+
+#### Naming views
+
+Give each view a short, meaningful name describing the cell population,
+phenotype, or biological perspective it shows — e.g. **"Tumor
+microenvironment"**, "CD8+ T cells", "Tissue architecture". Avoid generic
+names ("View 1", "Preset 2") and raw channel lists ("DAPI + CD8"): shared
+views surface by name in the viewer, and the name is what tells a colleague
+what the preset was built to show.
 
 ### Analysis results — user-chosen output prefix, many shapes
 

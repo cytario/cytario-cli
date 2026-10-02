@@ -26,6 +26,8 @@ class TestPackagedSkill:
         assert "name: cytario-cli" in content.splitlines()[1]
         assert "How Cytario data is laid out" in content
         assert "settings.<userId>.json" in content
+        assert 'schemaVersion: "1.2"' in content
+        assert 'kind: "settings"' in content
 
     def test_markdown_header_intact(self):
         assert packaged_skill().startswith("---\n")
