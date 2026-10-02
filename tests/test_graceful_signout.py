@@ -98,3 +98,24 @@ class TestFreshTokenSignsOutGracefully:
 
         assert result == id_token
         assert state.refresh_token == "rotated"
+
+    @respx.mock
+    def test_refresh_chatter_goes_to_stderr_not_stdout(self, tmp_path, monkeypatch, capsys):
+        import time as time_module
+
+        state = self.make_state(tmp_path, monkeypatch)
+        respx.post("https://auth.example.com/token").respond(
+            json={
+                "refresh_token": "rotated2",
+                "id_token": "x.y.z",
+                "access_token": "access-1",
+                "expires_in": 3600,
+            }
+        )
+        monkeypatch.setattr(time_module, "time", lambda: 1000.0)  # force the refresh path
+
+        cli._fresh_id_token(state)
+
+        captured = capsys.readouterr()
+        assert "Refreshing tokens" in captured.err
+        assert captured.out == ""  # stdout stays clean for redirected JSON output

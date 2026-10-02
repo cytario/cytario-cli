@@ -172,9 +172,26 @@ class TestDescribeFlow:
 
         imagedescribe.describe_flow(HOST, "Slides", "a.tif")
 
-        output = capsys.readouterr().out
-        assert "No browser available" in output
-        assert "ssh -L 54321:127.0.0.1:54321" in output
+        captured = capsys.readouterr()
+        assert "No browser available" in captured.err
+        assert "ssh -L 54321:127.0.0.1:54321" in captured.err
+
+    def test_stdout_stays_pure_json_for_redirection(self, monkeypatch, capsys):
+        monkeypatch.setattr(imagedescribe.webbrowser, "open", lambda url: False)
+        monkeypatch.setattr(LoopbackReceiver, "start", lambda self: None)
+        monkeypatch.setattr(LoopbackReceiver, "wait_ready", lambda self: 54321)
+        monkeypatch.setattr(
+            LoopbackReceiver, "wait_for_code", lambda self: {"payload": json.dumps({"image": {}})}
+        )
+
+        output = imagedescribe.describe_flow(HOST, "Slides", "a.tif")
+
+        captured = capsys.readouterr()
+        # describe_flow only returns the payload; the fallback instructions
+        # must not leak into stdout, so `describe > file` captures pure JSON.
+        assert captured.out == ""
+        assert "No browser available" in captured.err
+        assert json.loads(output) == {"image": {}}
 
     def test_url_carries_connection_path_and_port(self, monkeypatch):
         seen = {}

@@ -116,7 +116,11 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
     """Return an ID token with at least min_validity seconds left, refreshing as needed."""
     if state.id_token and id_token_expiry(state.id_token) - time.time() > min_validity:
         return state.id_token
-    typer.echo("Refreshing tokens...")
+    typer.secho(
+        "Refreshing tokens...",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
     try:
         tokens = refresh_token(state.token_endpoint, state.refresh_token)
     except RefreshGrantError:
