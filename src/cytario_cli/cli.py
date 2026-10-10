@@ -10,6 +10,9 @@ Commands:
                                    and token state.
   connections list [--json]       List the user's connections with their grants.
   connections setup [--all | NAME] Write AWS CLI profiles + token files.
+  rclone setup [--all | NAME]     Write rclone remotes (env_auth via the AWS
+                                   profiles) for local mounting with
+                                   `rclone mount` / `rclone nfsmount`.
   skill list [--json]             Show detected AI tools and skill install state.
   skill install [--tool ID] ...   Install or update the packaged agent skill
                                    into the detected AI tools' directories.
@@ -25,8 +28,10 @@ Usage:
   cytario auth login --host https://app.cytario.com
   cytario connections list --json
   cytario connections setup --all
+  cytario rclone setup --all
   cytario image describe s3://bucket/slide.ome.tif
   aws s3 ls --profile cytario-mybucket
+  rclone mount cytario-mybucket:mybucket ~/mnt/mybucket --vfs-cache-mode writes --daemon
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ import json as json_module
 import os
 import sys
 import time
-from pathlib import Path  # noqa: TC003  # Typer resolves option annotations at runtime
+from pathlib import Path  # Typer resolves option annotations at runtime
 from typing import Annotated
 
 import typer
@@ -60,6 +65,12 @@ from .oidc import (
     login_flow,
     refresh_token,
 )
+from .rcloneconfig import (
+    RcloneError,
+    rclone_config_path,
+    suggested_mount_command,
+    write_remote,
+)
 from .skill import (
     ToolTarget,
     detect_tools,
@@ -77,6 +88,10 @@ auth_app = typer.Typer(help="Sign in, tokens, and sign-out state.", no_args_is_h
 connections_app = typer.Typer(help="List connections and set up AWS CLI profiles.", no_args_is_help=True)
 app.add_typer(auth_app, name="auth")
 app.add_typer(connections_app, name="connections")
+rclone_app = typer.Typer(
+    help="Write rclone remotes for the connections, for local mounting.", no_args_is_help=True
+)
+app.add_typer(rclone_app, name="rclone")
 skill_app = typer.Typer(help="Install and update the packaged agent skill.", no_args_is_help=True)
 app.add_typer(skill_app, name="skill")
 image_app = typer.Typer(help="Read image metadata through the web app.", no_args_is_help=True)
@@ -329,15 +344,12 @@ def connections_list(
         )
 
 
-@connections_app.command("setup")
-def connections_setup(
-    setup_all: Annotated[bool, typer.Option("--all", help="Set up every connection with a grant")] = False,
-    name: Annotated[
-        str | None, typer.Argument(help="Connection name (defaults to --all when omitted)")
-    ] = None,
-    host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
-) -> None:
-    """Write an AWS CLI profile (web_identity_token_file) for each connection."""
+def _usable_connections(host: str | None, setup_all: bool, name: str | None) -> tuple[list[Connection], str]:
+    """Load signed-in state and resolve the selected usable connections.
+
+    Shared selection semantics of `connections setup` and `rclone setup`:
+    every connection with an applicable grant, or the one matching `name`.
+    """
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
     access_token = _fresh_access_token(state)
@@ -369,6 +381,19 @@ def connections_setup(
     elif not setup_all:
         typer.echo("No connection selected; use --all or pass a connection name.")
         raise typer.Exit(code=2)
+    return usable, id_token
+
+
+@connections_app.command("setup")
+def connections_setup(
+    setup_all: Annotated[bool, typer.Option("--all", help="Set up every connection with a grant")] = False,
+    name: Annotated[
+        str | None, typer.Argument(help="Connection name (defaults to --all when omitted)")
+    ] = None,
+    host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
+) -> None:
+    """Write an AWS CLI profile (web_identity_token_file) for each connection."""
+    usable, id_token = _usable_connections(host, setup_all, name)
 
     for connection in usable:
         token_file = write_token_file(connection.slug, id_token)
@@ -376,6 +401,42 @@ def connections_setup(
         typer.secho(
             f"{connection.name}: profile {profile!r} ready (token {token_file}).", fg=typer.colors.GREEN
         )
+
+
+@rclone_app.command("setup")
+def rclone_setup(
+    setup_all: Annotated[bool, typer.Option("--all", help="Set up every connection with a grant")] = False,
+    name: Annotated[
+        str | None, typer.Argument(help="Connection name (defaults to --all when omitted)")
+    ] = None,
+    host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
+) -> None:
+    """Write an rclone remote per connection for local mounting (via the AWS profiles)."""
+    usable, id_token = _usable_connections(host, setup_all, name)
+
+    config_path = rclone_config_path()
+    for connection in usable:
+        # The remote authenticates through this AWS profile; keep it current.
+        token_file = write_token_file(connection.slug, id_token)
+        profile = write_profile(connection, token_file)
+        try:
+            remote = write_remote(connection)
+        except RcloneError as error:
+            typer.secho(
+                f"{connection.name}: could not write rclone remote — {error}",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1) from error
+        typer.secho(
+            f"{connection.name}: rclone remote {remote!r} ready via profile {profile!r}"
+            + (f" (config {config_path})" if config_path else ""),
+            fg=typer.colors.GREEN,
+        )
+        typer.echo("  mount: " + " ".join(suggested_mount_command(connection)))
+        if sys.platform != "win32":
+            mountpoint = Path.home() / "mnt" / connection.slug
+            if not mountpoint.is_dir():
+                typer.echo(f"  (mountpoint missing — create it first: mkdir -p ~/mnt/{connection.slug})")
 
 
 @skill_app.command("list")
