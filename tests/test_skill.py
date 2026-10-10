@@ -39,6 +39,12 @@ class TestPackagedSkill:
         assert "AWS_ENDPOINT_URL_STS" in content  # non-AWS STS escape hatch
         assert "cytario auth refresh" in content  # long-mount token lifecycle
 
+    def test_mounts_are_documented_as_convenience_not_data_path(self):
+        content = packaged_skill()
+        assert "always prefer native S3 reads for actual data processing" in content
+        assert "Mounts are convenience, not a data path" in content
+        assert "mount to *look*" in content
+
     def test_markdown_header_intact(self):
         assert packaged_skill().startswith("---\n")
 

@@ -72,7 +72,10 @@ workstation's standard AWS tooling — never with the user's browser credentials
      through a DuckDB MCP server if available, else locally
      (`python -c "import duckdb; …"` or the `duckdb` CLI) on files `s3 cp`'d
      to a scratch dir; pandas/pyarrow work too but lack geometry handling.
-     Over a mount (step 5) the same files are plain paths — no `s3 cp` needed.
+     Over a mount (step 5) the same files are plain paths — no `s3 cp` needed
+     for interactive browsing. For actual data work (queries, analysis),
+     still use the S3-native paths below — mounts are slower for that (see
+     "Mount etiquette").
 7. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
    re-reads the token file on every `AssumeRoleWithWebIdentity`, so before any
    operation expected to outlast a token (or on `ExpiredToken` errors) run
@@ -359,14 +362,28 @@ process's environment and retry. AWS S3 connections work without this.
 ### Mount etiquette
 
 A mount makes bulk access tempting — the never-bulk-download rule still
-applies to image data. Mounts shine for browsing a connection with normal
-tools (open a results Parquet, read a sidecar, drag a config), where every
-file is just a path.
+applies to image data. Mounts are for **convenience** — interactive
+browsing with normal tools (open a sidecar, drag a config, glance at a
+CSV), where every file is just a path. They are **not** for analysis:
+**always prefer native S3 reads for actual data processing, at all times.**
+Every byte read through a mount goes through rclone's VFS layer on top of
+the same S3 API — query engines lose every S3-native shortcut. Reading a
+results Parquet over a mount (pandas/DuckDB on the mounted path) fetches
+the file through POSIX reads; the same query with DuckDB against
+`s3://<bucket>/<prefix>` on the profile session (or the DuckDB MCP server)
+reads only the needed column chunks via S3 range requests — typically much
+faster and cheaper. Same for image pixels (range reads) and any bulk copy.
+Rule of thumb: mount to *look*, use S3-native access (profiles, DuckDB,
+boto3) to *work*.
 
 ## Rules
 
 - **Data-transfer etiquette:** never bulk-download image data unless
   explicitly asked; use range reads (see above).
+- **Mounts are convenience, not a data path:** always prefer native S3 reads
+  (profiles, DuckDB on `s3://`, boto3 range reads) for any real data
+  processing — a mount adds a VFS/POSIX layer on top of S3 and loses the
+  S3-native optimizations (see "Mounting with rclone").
 - **You act as the user, with exactly their grant.** A `read-only` connection
   cannot be written to; `annotate` permits annotation and settings sidecar
   writes only; `read-write`/`admin` cover the connection's whole prefix.
