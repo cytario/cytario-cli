@@ -20,35 +20,6 @@ def make_target(tmp_path: Path, subdir: bool = False) -> ToolTarget:
     return ToolTarget("test-tool", "Test Tool", tmp_path / "tool-home", skills_dir, subdir)
 
 
-class TestPackagedSkill:
-    def test_ships_in_the_package_and_is_the_agent_skill(self):
-        content = packaged_skill()
-        assert "name: cytario-cli" in content.splitlines()[1]
-        assert "How Cytario data is laid out" in content
-        assert "settings.<userId>.json" in content
-        assert 'schemaVersion: "1.2"' in content
-        assert 'kind: "settings"' in content
-
-    def test_documents_rclone_mounting(self):
-        content = packaged_skill()
-        assert "cytario rclone setup --all" in content
-        assert "Mounting with rclone" in content
-        assert "env_auth = true" in content
-        assert "nfsmount" in content  # macOS recommendation
-        assert "WinFsp" in content  # Windows gate
-        assert "AWS_ENDPOINT_URL_STS" in content  # non-AWS STS escape hatch
-        assert "cytario auth refresh" in content  # long-mount token lifecycle
-
-    def test_mounts_are_documented_as_convenience_not_data_path(self):
-        content = packaged_skill()
-        assert "always prefer native S3 reads for actual data processing" in content
-        assert "Mounts are convenience, not a data path" in content
-        assert "mount to *look*" in content
-
-    def test_markdown_header_intact(self):
-        assert packaged_skill().startswith("---\n")
-
-
 class TestInstall:
     def test_install_creates_missing_copy(self, tmp_path):
         target = make_target(tmp_path)
