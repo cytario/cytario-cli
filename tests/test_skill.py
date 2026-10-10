@@ -29,6 +29,16 @@ class TestPackagedSkill:
         assert 'schemaVersion: "1.2"' in content
         assert 'kind: "settings"' in content
 
+    def test_documents_rclone_mounting(self):
+        content = packaged_skill()
+        assert "cytario rclone setup --all" in content
+        assert "Mounting with rclone" in content
+        assert "env_auth = true" in content
+        assert "nfsmount" in content  # macOS recommendation
+        assert "WinFsp" in content  # Windows gate
+        assert "AWS_ENDPOINT_URL_STS" in content  # non-AWS STS escape hatch
+        assert "cytario auth refresh" in content  # long-mount token lifecycle
+
     def test_markdown_header_intact(self):
         assert packaged_skill().startswith("---\n")
 

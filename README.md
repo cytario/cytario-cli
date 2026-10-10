@@ -17,6 +17,13 @@ with connection data using the workstation's standard AWS tooling.
   `web_identity_token_file`, so `aws` / boto3 / pandas perform
   `AssumeRoleWithWebIdentity` themselves — with exactly your grant's
   authorization, never wider.
+- **`cytario rclone setup [--all | <name>]`** — writes one rclone remote per
+  connection (`[cytario-<name>]`, `env_auth = true` + `profile`, no
+  credentials stored) into the rclone config, refreshing the AWS profile it
+  federates through, and prints a ready-to-run mount command for your OS —
+  so the bucket can be mounted locally with `rclone mount`/`nfsmount` and
+  browsed as a local folder (Linux/macOS) or drive letter (Windows, needs
+  WinFsp).
 - **`cytario auth status [--json]`** — the signed-in host, user (Keycloak
   `sub`, email, name), and token state; `--json` emits it machine-readable
   (agents need the `sub` to address per-user files such as
@@ -76,8 +83,11 @@ stored beyond your own refresh grant.
 cytario auth login --host https://app.cytario.com
 cytario connections list
 cytario connections setup --all
+cytario rclone setup --all
 cytario image describe s3://mybucket/prefix/slide.ome.tif
 aws s3 ls --profile cytario-mybucket
+# mount a connection locally (command printed by `cytario rclone setup`):
+rclone mount cytario-mybucket:mybucket ~/mnt/mybucket --vfs-cache-mode writes --daemon
 ```
 
 Host resolution order: `--host`, then `CYTARIO_HOST`, then the last

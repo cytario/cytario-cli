@@ -1,6 +1,6 @@
 ---
 name: cytario-cli
-description: This skill should be used when the user asks to "work with cytario data", "access cytario storage", "list my cytario connections", "download or upload files to a cytario bucket", "read analysis results from cytario", "use the cytario CLI", "set up AWS profiles for cytario", or when a task involves S3 data managed by Cytario (buckets, connections, imaging datasets, annotations, view settings, analysis results, saved job configs) that must be accessed programmatically as the signed-in user.
+description: This skill should be used when the user asks to "work with cytario data", "access cytario storage", "list my cytario connections", "download or upload files to a cytario bucket", "read analysis results from cytario", "use the cytario CLI", "set up AWS profiles for cytario", "mount cytario storage locally", "browse a cytario bucket as a local folder or drive", "use rclone with cytario", or when a task involves S3 data managed by Cytario (buckets, connections, imaging datasets, annotations, view settings, analysis results, saved job configs) that must be accessed programmatically as the signed-in user.
 ---
 
 # Cytario CLI — agent workflow for cytario-managed data
@@ -56,7 +56,15 @@ workstation's standard AWS tooling — never with the user's browser credentials
    connection name) writes one AWS CLI profile per connection
    (`~/.aws/config`, `[profile cytario-<name>]`) plus token files under
    `~/.aws/cytario/`. Standard tooling then does the federation itself.
-5. **Work with the data** via the generated profiles:
+5. **Mount a connection locally (optional):** `cytario rclone setup --all`
+   writes one rclone remote per connection (`[cytario-<name>]`, `type = s3`,
+   `env_auth = true`, `profile = cytario-<name>`) into the rclone config —
+   no credentials stored, the remote federates through the AWS profile from
+   step 4, and the command refreshes that profile/token file as part of the
+   run. It then prints a ready-to-run `mount:` command; see
+   "Mounting with rclone" below for the OS-specific details and flags before
+   running or suggesting it.
+6. **Work with the data** via the generated profiles:
    - `aws --profile cytario-<name> s3 ls s3://<bucket>/<prefix>`
    - `aws --profile cytario-<name> s3 cp ...`
    - boto3: `boto3.session.Session(profile_name="cytario-<name>")`
@@ -64,10 +72,12 @@ workstation's standard AWS tooling — never with the user's browser credentials
      through a DuckDB MCP server if available, else locally
      (`python -c "import duckdb; …"` or the `duckdb` CLI) on files `s3 cp`'d
      to a scratch dir; pandas/pyarrow work too but lack geometry handling.
-6. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
+     Over a mount (step 5) the same files are plain paths — no `s3 cp` needed.
+7. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
    re-reads the token file on every `AssumeRoleWithWebIdentity`, so before any
    operation expected to outlast a token (or on `ExpiredToken` errors) run
    `cytario auth refresh` to rewrite all token files from a fresh ID token.
+   This applies to long-running mounts too — see "Mounting with rclone".
 
 ## How Cytario data is laid out in the bucket
 
@@ -281,6 +291,78 @@ when the deployment's web app predates the describe route, for Akoya QPTIFF
 - **Check for a `<image>.README.txt` companion first** — Akoya exports often
   carry the panel story (marker list, fluorophores, cycle structure) there.
 
+## Mounting with rclone
+
+`cytario rclone setup --all` (or with a connection name) writes an rclone
+remote per connection so the whole bucket prefix can be mounted as a local
+filesystem. The remote stores **no credentials**: `env_auth = true` +
+`profile = cytario-<name>` makes rclone federate through the AWS CLI profile
+(`web_identity_token_file`), exactly like `aws s3` does — per operation, with
+exactly the user's grant. The setup command prints a ready-to-run mount
+command for the detected platform; the OS differences below matter.
+
+### Per-OS mounting
+
+Always check the OS before suggesting or running a mount — the right command
+differs:
+
+- **macOS:** use `rclone nfsmount`, not `rclone mount` — rclone itself
+  recommends it on macOS, and it avoids macFUSE/FUSE-T problems (FUSE-T +
+  Finder mutates file mtimes, which can trigger full re-uploads; `--read-only`
+  can fail silently). Without `--vfs-cache-mode`, an NFS mount is **read-only**.
+  Unmount with `umount` or `diskutil unmount`, not `fusermount`.
+- **Linux:** `rclone mount` is the battle-tested default; `--daemon`
+  backgrounds it. Unmount with `fusermount -u` or `umount`.
+- **Windows:** mounts work **only with WinFsp installed**
+  (https://winfsp.dev/rel/). Check for it before suggesting a mount — without
+  it, fall back to the `aws s3` workflows above and tell the user why.
+  `--daemon` is unsupported (foreground only); mount to a drive letter (`X:`)
+  or a directory path. `nfsmount` and `mount` behave the same on Windows.
+
+### Flags that matter
+
+- `--vfs-cache-mode writes` — needed for normal write support (read+write
+  opens, random writes, retried uploads); without it, only sequential
+  writes work — and on macOS NFS mounts, nothing writes at all.
+- `--read-only` — for `read-only` connections; denies writes at the filesystem
+  level, matching the grant (never try to widen it).
+- `--daemon` / `--daemon-wait` — background the mount (Unix only); on macOS
+  pass a reasonable `--daemon-wait` (the default sleep matters there).
+- Reading multi-GB images through a mount works without a cache: VFS chunked
+  reading serves random-access range reads directly. Do not reach for
+  `--vfs-cache-mode full` unless the user needs it — it copies reads to disk.
+
+### Long-running mounts
+
+- ID tokens live ~1 hour; rclone re-reads the token file when its cached
+  credentials expire, so run `cytario auth refresh` during long sessions —
+  expired-token failures on a mounted path mean refresh (and if the grant was
+  revoked, re-login).
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment silently
+  override the named profile — unset them for the mount process.
+- Remote names are `cytario-<connection-name>`; the mount root is
+  `<remote>:<bucket>/<prefix>`. `rclone listremotes` shows what's configured.
+- Re-running `cytario rclone setup` refreshes both the AWS profile and the
+  remote in one pass, so an expired or hand-edited config self-heals on the
+  next setup.
+
+### Non-AWS storage providers
+
+For S3-compatible endpoints (MinIO, R2, …) the remote additionally sets
+`endpoint` and path-style addressing, matching how the platform talks to
+them. Note the federation call (`AssumeRoleWithWebIdentity`) may need the
+provider's own STS endpoint, which rclone cannot configure
+(`--s3-sts-endpoint` is dead in the v2 SDK): if it fails, export
+`AWS_ENDPOINT_URL_STS=<endpoint>` (or `AWS_ENDPOINT_URL`) in the mount
+process's environment and retry. AWS S3 connections work without this.
+
+### Mount etiquette
+
+A mount makes bulk access tempting — the never-bulk-download rule still
+applies to image data. Mounts shine for browsing a connection with normal
+tools (open a results Parquet, read a sidecar, drag a config), where every
+file is just a path.
+
 ## Rules
 
 - **Data-transfer etiquette:** never bulk-download image data unless
@@ -300,6 +382,7 @@ when the deployment's web app predates the describe route, for Akoya QPTIFF
   Cytario-managed companions, not content. Only edit them when the user asks.
 - Prefer `connections list --json` (machine-readable) over parsing table output.
 - Name-locality: profiles are `cytario-<connection-name>`; token files
-  `~/.aws/cytario/<connection-name>/id_token`.
+  `~/.aws/cytario/<connection-name>/id_token`; rclone remotes
+  `cytario-<connection-name>` (see "Mounting with rclone").
 - If `auth token`/`connections list` returns "rejected", the grant was revoked
   or expired — ask the user to sign in again; do not retry in a loop.
