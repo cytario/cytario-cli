@@ -81,8 +81,8 @@ workstation's standard AWS tooling — never with the user's browser credentials
      `s3 cp` a Parquet file to a scratch dir, and do not load one into
      pandas/pyarrow — that downloads the whole file into memory; the
      smallest legitimate local artifact is a DuckDB-produced aggregate.
-     Run such scripts with `uv run --with duckdb python …` (see "Running
-     Python tooling" below).
+     Run such scripts with `uv run --with duckdb python …` when uv is
+     available, else from a venv (see "Running Python tooling" below).
      Over a mount (step 5) the same files are plain paths — no `s3 cp` needed
      for interactive browsing. For actual data work (queries, analysis),
      still use the S3-native paths below — mounts are slower for that (see
@@ -309,19 +309,20 @@ when the deployment's web app predates the describe route, for Akoya QPTIFF
 
 ## Running Python tooling
 
-The workstation has **uv**. Never `pip install` anything — it mutates an
-environment that isn't yours to change, and on managed machines it fails or
-pollutes a shared site-packages. For a one-off script or an ad-hoc
-dependency, run it ephemerally:
+Never `pip install` into the system environment — it mutates an
+environment that isn't yours to change. The rule is to prefer a venv
+(`python -m venv .venv`), and, when `uv` is available on the machine, to
+use it with `--with` for one-off scripts and ad-hoc dependencies:
 
 ```bash
 uv run --with duckdb,pyarrow python analysis.py
 uv run --with duckdb python -c "import duckdb; …"
 ```
 
-`uv run` caches the packages and throws the environment away afterwards.
-Fall back to `pip install --user` (or a venv) only when uv is absent and the
-user explicitly asks for an install.
+`uv run --with` builds an ephemeral environment with just those packages
+(cached between runs) and installs nothing. Check that uv exists before
+relying on it (`command -v uv`); without it, create a venv and pip
+install inside that venv only.
 
 ## Mounting with rclone
 
@@ -417,9 +418,9 @@ boto3) to *work*.
   that comes down. pandas/pyarrow never read a results Parquet directly —
   they would pull the entire file. They consume DuckDB's aggregate
   (see step 6).
-- **Never `pip install`.** The workstation has uv: run one-off scripts and
-  ad-hoc dependencies with `uv run --with <pkgs> python …` (see "Running
-  Python tooling").
+- **Never `pip install` into the system environment.** Prefer a venv; when
+  uv is available, one-off scripts and ad-hoc dependencies run with
+  `uv run --with <pkgs> python …` (see "Running Python tooling").
 - **Mounts are convenience, not a data path:** always prefer native S3 reads
   (profiles, DuckDB on `s3://`, boto3 range reads) for any real data
   processing — a mount adds a VFS/POSIX layer on top of S3 and loses the
