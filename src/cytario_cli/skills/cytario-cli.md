@@ -68,10 +68,15 @@ workstation's standard AWS tooling — never with the user's browser credentials
    - `aws --profile cytario-<name> s3 ls s3://<bucket>/<prefix>`
    - `aws --profile cytario-<name> s3 cp ...`
    - boto3: `boto3.session.Session(profile_name="cytario-<name>")`
-   - Parquet/GeoParquet (results, overlays): query directly with DuckDB —
-     through a DuckDB MCP server if available, else locally
-     (`python -c "import duckdb; …"` or the `duckdb` CLI) on files `s3 cp`'d
-     to a scratch dir; pandas/pyarrow work too but lack geometry handling.
+   - Parquet/GeoParquet (results, overlays): query **in place** with DuckDB
+     against the `s3://` URI on the profile session — through a DuckDB MCP
+     server if available, else `uv run --with duckdb python …` (see "Running
+     Python tooling" below). DuckDB's httpfs extension reads only the needed
+     column chunks and row groups over S3 range requests, so a query against
+     `s3://<bucket>/<prefix>/results.parquet` never copies the file. Do not
+     `s3 cp` a Parquet file to a scratch dir first; copy one only when a tool
+     genuinely cannot read S3 URIs. pandas/pyarrow work too but lack
+     geometry handling and pull whole files into memory.
      Over a mount (step 5) the same files are plain paths — no `s3 cp` needed
      for interactive browsing. For actual data work (queries, analysis),
      still use the S3-native paths below — mounts are slower for that (see
@@ -241,7 +246,8 @@ or flat `xmin/xmax/ymin/ymax` columns), plain Parquet, CSV, GeoJSON, HDF5
 (deprecated), QC tiles. For overlay rendering the app auto-detects id
 (`object`/`id`/`cell_id`/`label`), geometry (`geom`/`geometry`/`wkt`/…), and
 centroid x/y columns; boolean class columns are prefixed `marker_positive_`.
-Results are user data — read and analyze freely.
+Read and analyze results freely — with DuckDB against the `s3://` URI rather
+than after copying them somewhere (step 6). Results are user data.
 
 ### Job configs — `configs/<name>.yaml`
 
@@ -293,6 +299,22 @@ when the deployment's web app predates the describe route, for Akoya QPTIFF
   when authoring view presets.
 - **Check for a `<image>.README.txt` companion first** — Akoya exports often
   carry the panel story (marker list, fluorophores, cycle structure) there.
+
+## Running Python tooling
+
+The workstation has **uv**. Never `pip install` anything — it mutates an
+environment that isn't yours to change, and on managed machines it fails or
+pollutes a shared site-packages. For a one-off script or an ad-hoc
+dependency, run it ephemerally:
+
+```bash
+uv run --with duckdb,pyarrow python analysis.py
+uv run --with duckdb python -c "import duckdb; …"
+```
+
+`uv run` caches the packages and throws the environment away afterwards.
+Fall back to `pip install --user` (or a venv) only when uv is absent and the
+user explicitly asks for an install.
 
 ## Mounting with rclone
 
@@ -380,6 +402,12 @@ boto3) to *work*.
 
 - **Data-transfer etiquette:** never bulk-download image data unless
   explicitly asked; use range reads (see above).
+- **Query Parquet in place:** DuckDB reads `s3://` URIs directly (column
+  chunks over range requests) — never copy a Parquet/GeoParquet results file
+  to a scratch dir just to open it (see step 6).
+- **Never `pip install`.** The workstation has uv: run one-off scripts and
+  ad-hoc dependencies with `uv run --with <pkgs> python …` (see "Running
+  Python tooling").
 - **Mounts are convenience, not a data path:** always prefer native S3 reads
   (profiles, DuckDB on `s3://`, boto3 range reads) for any real data
   processing — a mount adds a VFS/POSIX layer on top of S3 and loses the
