@@ -66,12 +66,23 @@ workstation's standard AWS tooling — never with the user's browser credentials
    running or suggesting it.
 6. **Work with the data** via the generated profiles:
    - `aws --profile cytario-<name> s3 ls s3://<bucket>/<prefix>`
-   - `aws --profile cytario-<name> s3 cp ...`
+   - `aws --profile cytario-<name> s3 cp ...` (small sidecars and metadata
+     only — results Parquet/GeoParquet is often in the **GB range**; never
+     download it without explicit user approval, see the Rules)
    - boto3: `boto3.session.Session(profile_name="cytario-<name>")`
-   - Parquet/GeoParquet (results, overlays): query directly with DuckDB —
-     through a DuckDB MCP server if available, else locally
-     (`python -c "import duckdb; …"` or the `duckdb` CLI) on files `s3 cp`'d
-     to a scratch dir; pandas/pyarrow work too but lack geometry handling.
+   - Parquet/GeoParquet (results, overlays): the pattern is **script-first** —
+     write a Python script that uses DuckDB against the `s3://` URI on the
+     profile session (or a DuckDB MCP server if available) to run the whole
+     query remotely — filter, aggregate, group by — and produce a small
+     aggregate table or exported CSV/Parquet, which later tooling (plotting,
+     stats, pandas) then works on locally. DuckDB's httpfs extension reads
+     only the needed column chunks and row groups over S3 range requests, so
+     the source file is never copied and only the aggregate travels. Do not
+     `s3 cp` a Parquet file to a scratch dir, and do not load one into
+     pandas/pyarrow — that downloads the whole file into memory; the
+     smallest legitimate local artifact is a DuckDB-produced aggregate.
+     Run such scripts with `uv run --with duckdb python …` when uv is
+     available, else from a venv (see "Running Python tooling" below).
      Over a mount (step 5) the same files are plain paths — no `s3 cp` needed
      for interactive browsing. For actual data work (queries, analysis),
      still use the S3-native paths below — mounts are slower for that (see
@@ -241,7 +252,9 @@ or flat `xmin/xmax/ymin/ymax` columns), plain Parquet, CSV, GeoJSON, HDF5
 (deprecated), QC tiles. For overlay rendering the app auto-detects id
 (`object`/`id`/`cell_id`/`label`), geometry (`geom`/`geometry`/`wkt`/…), and
 centroid x/y columns; boolean class columns are prefixed `marker_positive_`.
-Results are user data — read and analyze freely.
+Results are user data — read and analyze freely, but these files are often
+**GB-sized**: aggregate first with DuckDB against the `s3://` URI (step 6) and
+never download one without explicit user approval.
 
 ### Job configs — `configs/<name>.yaml`
 
@@ -293,6 +306,23 @@ when the deployment's web app predates the describe route, for Akoya QPTIFF
   when authoring view presets.
 - **Check for a `<image>.README.txt` companion first** — Akoya exports often
   carry the panel story (marker list, fluorophores, cycle structure) there.
+
+## Running Python tooling
+
+Never `pip install` into the system environment — it mutates an
+environment that isn't yours to change. The rule is to prefer a venv
+(`python -m venv .venv`), and, when `uv` is available on the machine, to
+use it with `--with` for one-off scripts and ad-hoc dependencies:
+
+```bash
+uv run --with duckdb,pyarrow python analysis.py
+uv run --with duckdb python -c "import duckdb; …"
+```
+
+`uv run --with` builds an ephemeral environment with just those packages
+(cached between runs) and installs nothing. Check that uv exists before
+relying on it (`command -v uv`); without it, create a venv and pip
+install inside that venv only.
 
 ## Mounting with rclone
 
@@ -380,6 +410,17 @@ boto3) to *work*.
 
 - **Data-transfer etiquette:** never bulk-download image data unless
   explicitly asked; use range reads (see above).
+- **Never download results Parquet/GeoParquet.** These files are often in the
+  GB range — copying one moves gigabytes and is allowed only with explicit
+  user approval. The workflow is script-first: DuckDB queries the `s3://`
+  URI in place (whole filter/aggregate remotely, httpfs reads only the
+  needed column chunks) and the small aggregate table is the only thing
+  that comes down. pandas/pyarrow never read a results Parquet directly —
+  they would pull the entire file. They consume DuckDB's aggregate
+  (see step 6).
+- **Never `pip install` into the system environment.** Prefer a venv; when
+  uv is available, one-off scripts and ad-hoc dependencies run with
+  `uv run --with <pkgs> python …` (see "Running Python tooling").
 - **Mounts are convenience, not a data path:** always prefer native S3 reads
   (profiles, DuckDB on `s3://`, boto3 range reads) for any real data
   processing — a mount adds a VFS/POSIX layer on top of S3 and loses the
