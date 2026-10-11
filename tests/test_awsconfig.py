@@ -52,6 +52,28 @@ class TestConnection:
         assert make_connection(name="Lab Data 2024!").slug == "lab-data-2024"
         assert profile_name(make_connection(name="Lab Data 2024!")) == "cytario-lab-data-2024"
 
+    def test_has_grant_reflects_the_resolved_grant(self):
+        # AWS: role ARN present
+        assert make_connection().has_grant
+        # RustFS: ARN-less grant, access level only
+        assert make_connection(role_arn=None, access_level="admin").has_grant
+        # no grant at all
+        assert not make_connection(role_arn=None, access_level=None).has_grant
+
+    def test_can_setup_fails_closed_for_aws_without_role_arn(self):
+        # AWS: role ARN present
+        assert make_connection().can_setup
+        # RustFS: ARN-less grant on the provider's own endpoint
+        assert make_connection(
+            role_arn=None,
+            access_level="read-only",
+            s3_endpoint="https://rustfs.internal:9000",
+        ).can_setup
+        # corrupt AWS row: an access level but no ARN must not be set up
+        assert not make_connection(role_arn=None, access_level="admin").can_setup
+        # no grant at all
+        assert not make_connection(role_arn=None, access_level=None).can_setup
+
 
 class TestWriteProfile:
     def test_writes_managed_profile_without_global_header(self, tmp_path, monkeypatch):
@@ -118,6 +140,39 @@ class TestWriteProfile:
         parser = configparser.RawConfigParser()
         parser.read(tmp_path / "aws" / "config")
         assert parser[f"profile {profile}"]["endpoint_url"] == "https://minio.internal:9000"
+
+    def test_rustfs_grant_gets_placeholder_role_arn_and_endpoint_url(self, tmp_path, monkeypatch):
+        """A resolved RustFS grant has no role ARN — botocore still needs one."""
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
+        connection = make_connection(
+            role_arn=None,
+            access_level="admin",
+            s3_endpoint="https://rustfs.internal:9000",
+            sts_endpoint="https://rustfs.internal:9000",
+        )
+        token_file = Path("/tmp/t")
+
+        profile = write_profile(connection, token_file)
+
+        parser = configparser.RawConfigParser()
+        parser.read(tmp_path / "aws" / "config")
+        section = parser[f"profile {profile}"]
+        assert section["role_arn"] == "arn:aws:iam:::role/cytario-rustfs"
+        assert section["endpoint_url"] == "https://rustfs.internal:9000"
+        assert section["web_identity_token_file"] == str(token_file)
+
+    def test_aws_endpoint_never_gets_a_synthesized_role_arn(self, tmp_path, monkeypatch):
+        """Fail closed: an AWS-S3 row without a role ARN must not be minted."""
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
+        connection = make_connection(role_arn=None)
+
+        profile = write_profile(connection, Path("/tmp/t"))
+
+        parser = configparser.RawConfigParser()
+        parser.read(tmp_path / "aws" / "config")
+        section = parser[f"profile {profile}"]
+        assert section["role_arn"] == ""  # no placeholder — the caller gates on has_grant
+        assert "endpoint_url" not in section
 
     def test_upsert_replaces_only_our_fields(self, tmp_path, monkeypatch):
         monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")

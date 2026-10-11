@@ -381,13 +381,17 @@ differs:
 
 ### Non-AWS storage providers
 
-For S3-compatible endpoints (MinIO, R2, …) the remote additionally sets
-`endpoint` and path-style addressing, matching how the platform talks to
-them. Note the federation call (`AssumeRoleWithWebIdentity`) may need the
-provider's own STS endpoint, which rclone cannot configure
-(`--s3-sts-endpoint` is dead in the v2 SDK): if it fails, export
+For S3-compatible endpoints (RustFS, R2, …) the profile additionally sets
+`endpoint_url` and the rclone remote sets `endpoint` + path-style addressing,
+matching how the platform talks to them. On RustFS, STS lives on the same
+endpoint as S3 (both the federation call and data calls go there), so no
+separate STS endpoint override is needed; if some other S3-compatible
+provider splits its STS endpoint from S3, export
 `AWS_ENDPOINT_URL_STS=<endpoint>` (or `AWS_ENDPOINT_URL`) in the mount
-process's environment and retry. AWS S3 connections work without this.
+process's environment. RustFS grants carry no role ARN (the platform maps
+your Cytario grant from the OIDC token instead); the profile holds a
+placeholder `role_arn` because the AWS tooling requires the field, but the
+provider never reads it.
 
 ### Mount etiquette
 
