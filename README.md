@@ -16,7 +16,10 @@ with connection data using the workstation's standard AWS tooling.
   per connection into `~/.aws/config` (`[profile cytario-<name>]`) with
   `web_identity_token_file`, so `aws` / boto3 / pandas perform
   `AssumeRoleWithWebIdentity` themselves — with exactly your grant's
-  authorization, never wider.
+  authorization, never wider. RustFS-backed connections additionally get
+  `endpoint_url` (federation and data calls both go to the provider's own
+  S3-compatible endpoint) and a placeholder `role_arn` — RustFS has no role
+  ARNs; the entitlement is your Cytario grant, mapped from the OIDC token.
 - **`cytario rclone setup [--all | <name>]`** — writes one rclone remote per
   connection (`[cytario-<name>]`, `env_auth = true` + `profile`, no
   credentials stored) into the rclone config, refreshing the AWS profile it

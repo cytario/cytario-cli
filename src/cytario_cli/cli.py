@@ -251,7 +251,7 @@ def _refresh_token_files(host: str, access_token: str, id_token: str) -> None:
         typer.secho(f"Could not list connections: {error}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from error
     for connection in connections:
-        if connection.role_arn:
+        if connection.can_setup:
             write_token_file(connection.slug, id_token)
     typer.secho(f"Refreshed {len(connections)} token file(s).", fg=typer.colors.GREEN)
 
@@ -334,11 +334,12 @@ def connections_list(
         typer.echo("No connections visible to you.")
         return
     for connection in connections:
-        grant = (
-            f"{connection.access_level} ({connection.role_arn})"
-            if connection.role_arn
-            else "no applicable grant"
-        )
+        if not connection.has_grant:
+            grant = "no applicable grant"
+        elif connection.role_arn:
+            grant = f"{connection.access_level} ({connection.role_arn})"
+        else:
+            grant = f"{connection.access_level} (role ARN not used on this provider)"
         typer.echo(
             f"{connection.name}  bucket={connection.bucket_name}  region={connection.region}  grant={grant}"
         )
@@ -364,7 +365,7 @@ def _usable_connections(host: str | None, setup_all: bool, name: str | None) -> 
         typer.secho("No connections are visible to you on this host.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    usable = [connection for connection in connections if connection.role_arn]
+    usable = [connection for connection in connections if connection.can_setup]
     if not usable:
         typer.secho(
             "Connections are visible, but none has a grant applicable to you — "

@@ -123,6 +123,62 @@ class TestRcloneSetup:
         self.stub_rclone(monkeypatch, tmp_path)
         payload = connection_payload()
         payload["connections"][0]["roleArn"] = None
+        payload["connections"][0]["accessLevel"] = None
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            cli.rclone_setup(setup_all=True, name=None, host=None)
+        assert exit_info.value.exit_code == 1
+        assert "none has a grant applicable" in capsys.readouterr().out
+
+    @respx.mock
+    def test_rustfs_grant_is_usable_and_gets_placeholder_arn(self, tmp_path, monkeypatch, capsys):
+        """An ARN-less RustFS grant (access level only) sets up fully."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        seen = self.stub_rclone(monkeypatch, tmp_path)
+        payload = connection_payload()
+        payload["connections"][0].update(
+            {
+                "roleArn": None,
+                "accessLevel": "admin",
+                "s3Endpoint": "https://rustfs.internal:9000",
+                "stsEndpoint": "https://rustfs.internal:9000",
+            }
+        )
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.rclone_setup(setup_all=True, name=None, host=None)
+
+        output = capsys.readouterr().out
+        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert seen["argv"] == [
+            [
+                "rclone",
+                "config",
+                "create",
+                "cytario-demo",
+                "s3",
+                "env_auth=true",
+                "profile=cytario-demo",
+                "region=eu-central-1",
+                "provider=Other",
+                "endpoint=https://rustfs.internal:9000",
+                "force_path_style=true",
+            ]
+        ]
+        aws_config = (tmp_path / "aws" / "config").read_text()
+        assert "role_arn = arn:aws:iam:::role/cytario-rustfs" in aws_config
+        assert "endpoint_url = https://rustfs.internal:9000" in aws_config
+        assert (tmp_path / "tokens" / "demo" / "id_token").read_text() == state.id_token
+
+    @respx.mock
+    def test_aws_row_without_role_arn_exits_1(self, tmp_path, monkeypatch, capsys):
+        """Fail closed: an AWS-S3 grant with a null role ARN is never set up."""
+        self.make_state(tmp_path, monkeypatch).save()
+        self.stub_rclone(monkeypatch, tmp_path)
+        payload = connection_payload()
+        payload["connections"][0]["roleArn"] = None  # accessLevel stays set
         respx.get(f"{HOST}/api/me/connections").respond(json=payload)
 
         with pytest.raises(typer.Exit) as exit_info:

@@ -3,11 +3,15 @@
 Writes one named profile per connection into ~/.aws/config, pointing the
 standard AWS tooling at the connection's storage role via
 ``web_identity_token_file`` — the tooling performs AssumeRoleWithWebIdentity
-itself. Only profile blocks the CLI itself created are ever replaced; the
-rest of the file (user profiles, comments, formatting) is preserved through
-ConfigUpdater's round-trip editing. ConfigUpdater is kept non-strict so a
-damaged file (duplicate sections left by older releases) still loads — the
-validation step then reports it instead of silently rewriting.
+itself. ARN-less providers (RustFS) get a placeholder ``role_arn`` (botocore
+requires the field present; the provider ignores it — entitlement comes from
+the OIDC token) plus ``endpoint_url`` so federation and data calls both hit
+the provider's own S3-compatible endpoint. Only profile blocks the CLI
+itself created are ever replaced; the rest of the file (user profiles,
+comments, formatting) is preserved through ConfigUpdater's round-trip
+editing. ConfigUpdater is kept non-strict so a damaged file (duplicate
+sections left by older releases) still loads — the validation step then
+reports it instead of silently rewriting.
 """
 
 from __future__ import annotations
@@ -24,6 +28,10 @@ from configupdater import ConfigUpdater
 PROFILE_PREFIX = "cytario-"
 AWS_CONFIG_PATH = Path.home() / ".aws" / "config"
 MANAGED_COMMENT = "managed by cytario-cli"
+# ARN-less providers (RustFS) still need a syntactically valid role_arn in the
+# profile — botocore refuses to run the web-identity flow without one, while
+# the provider never reads the field (entitlement comes from the OIDC token).
+PLACEHOLDER_ROLE_ARN = "arn:aws:iam:::role/cytario-rustfs"
 
 
 @dataclass
@@ -61,6 +69,27 @@ class Connection:
         slug = re.sub(r"[^a-z0-9-]+", "-", self.name.lower()).strip("-")
         return slug or "connection"
 
+    @property
+    def has_grant(self) -> bool:
+        """Whether the API resolved an applicable grant for the user.
+
+        AWS grants carry a role ARN; ARN-less providers (RustFS) carry only the
+        access level. Either signals a grant — a row with neither has none.
+        """
+        return bool(self.role_arn or self.access_level)
+
+    @property
+    def can_setup(self) -> bool:
+        """Whether a working profile can be written for the connection.
+
+        An AWS S3 grant needs its role ARN (fail closed, mirroring the
+        platform's own AWS mint); an ARN-less grant is only usable on a
+        non-AWS endpoint, where the provider never reads the field.
+        """
+        if self.role_arn:
+            return True
+        return bool(self.access_level) and not _is_aws_endpoint(self.s3_endpoint)
+
 
 def profile_name(connection: Connection) -> str:
     """Return the AWS CLI profile name for a connection."""
@@ -69,6 +98,10 @@ def profile_name(connection: Connection) -> str:
 
 def _is_managed(section_name: str) -> bool:
     return section_name.startswith(f"profile {PROFILE_PREFIX}")
+
+
+def _is_aws_endpoint(endpoint: str) -> bool:
+    return "amazonaws.com" in endpoint
 
 
 def _parse(path: Path) -> ConfigUpdater:
@@ -92,9 +125,12 @@ def _upsert(updater: ConfigUpdater, connection: Connection, token_file: Path) ->
         section.add_before.comment(MANAGED_COMMENT, comment_prefix="#")
 
     section["region"] = connection.region
-    section["role_arn"] = connection.role_arn or ""
+    role_arn = connection.role_arn
+    if not role_arn and not _is_aws_endpoint(connection.s3_endpoint):
+        role_arn = PLACEHOLDER_ROLE_ARN
+    section["role_arn"] = role_arn or ""
     section["web_identity_token_file"] = str(token_file)
-    if "amazonaws.com" not in connection.s3_endpoint:
+    if not _is_aws_endpoint(connection.s3_endpoint):
         section["endpoint_url"] = connection.s3_endpoint
 
 
