@@ -393,6 +393,25 @@ your Cytario grant from the OIDC token instead); the profile holds a
 placeholder `role_arn` because the AWS tooling requires the field, but the
 provider never reads it.
 
+### Public (credential-less) connections
+
+A public connection points at a bucket whose own public-read policy is the
+entire entitlement: no credential exists for it and none is ever minted. It
+appears in `connections list` as `read-only (public — anonymous reads)`, and
+its endpoint is always AWS S3 (the platform's built-in public provider).
+
+- **`connections setup` skips it.** An AWS profile cannot express unsigned
+  reads (botocore's unsigned mode is code-only — a config file cannot disable
+  signing), and the CLI never writes static keys. The command says so and
+  points at `rclone setup`.
+- **`rclone setup` handles it**: the remote is written with blank credentials
+  (rclone's documented public-bucket shape — just `provider = AWS`). Listing
+  and copying work anonymously; uploading is impossible, matching the
+  read-only grant. The suggested mount command carries `--read-only` and no
+  AWS-profile annotation, since nothing federates.
+- No token file is written for a public connection — `cytario auth refresh`
+  simply does not touch it.
+
 ### Mount etiquette
 
 A mount makes bulk access tempting — the never-bulk-download rule still

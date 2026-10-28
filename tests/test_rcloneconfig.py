@@ -32,6 +32,12 @@ def make_connection(**overrides) -> Connection:
     return Connection(**defaults)
 
 
+def make_public_connection(**overrides) -> Connection:
+    """The shape /api/me/connections reports for a public (credential-less)
+    connection: read-only with a null role ARN."""
+    return make_connection(role_arn=None, access_level="read-only", **overrides)
+
+
 class TestRemoteOptions:
     def test_remote_name_is_namespaced(self):
         assert remote_name(make_connection(name="Lab Data 2024!")) == "cytario-lab-data-2024"
@@ -55,6 +61,27 @@ class TestRemoteOptions:
     def test_no_secret_values_stored(self):
         options = dict(remote_options(make_connection()))
         assert not any("key" in k or "secret" in k or "token" in k for k in options)
+
+    def test_public_aws_options_are_anonymous(self):
+        """rclone's documented public-bucket shape: provider only, blank
+        credentials — no env_auth, no profile, nothing to federate through."""
+        options = dict(remote_options(make_public_connection()))
+        assert options == {"provider": "AWS"}
+
+    def test_public_s3_compatible_options_take_the_rustfs_shape(self):
+        """A null-ARN read-only grant on a non-AWS endpoint is indistinguishable
+        from a RustFS grant (identical wire shape), so it keeps the working
+        federating path instead of degrading to anonymous."""
+        options = dict(
+            remote_options(
+                make_connection(
+                    role_arn=None, access_level="read-only", s3_endpoint="https://mirror.example.org"
+                )
+            )
+        )
+        assert options["env_auth"] == "true"
+        assert options["provider"] == "Other"
+        assert options["endpoint"] == "https://mirror.example.org"
 
 
 class TestWriteRemote:
@@ -157,3 +184,9 @@ class TestSuggestedMountCommand:
         command = suggested_mount_command(make_connection(access_level="read-only"))
         assert "--read-only" in command
         assert "--vfs-cache-mode" not in command
+
+    def test_public_connection_mount_has_no_profile_annotation(self, monkeypatch):
+        self._platform(monkeypatch, "linux")
+        command = suggested_mount_command(make_public_connection())
+        assert "--read-only" in command
+        assert not any("AWS profile" in arg for arg in command)

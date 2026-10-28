@@ -31,6 +31,12 @@ def make_connection(**overrides) -> Connection:
     return Connection(**defaults)
 
 
+def make_public_connection(**overrides) -> Connection:
+    """The shape /api/me/connections reports for a public (credential-less)
+    connection: read-only with a null role ARN."""
+    return make_connection(role_arn=None, access_level="read-only", **overrides)
+
+
 class TestConnection:
     def test_from_api_payload(self):
         connection = Connection.from_api(
@@ -69,10 +75,27 @@ class TestConnection:
             access_level="read-only",
             s3_endpoint="https://rustfs.internal:9000",
         ).can_setup
-        # corrupt AWS row: an access level but no ARN must not be set up
+        # a public connection (ARN-less read-only, the platform's synthesized
+        # grant) gets no AWS profile at all — rclone serves it anonymously
+        assert not make_connection(role_arn=None, access_level="read-only").can_setup
+        # non-public ARN-less AWS row (corrupt) must not be set up
         assert not make_connection(role_arn=None, access_level="admin").can_setup
         # no grant at all
         assert not make_connection(role_arn=None, access_level=None).can_setup
+
+    def test_is_public_matches_the_synthesized_grant(self):
+        # the exact shape /api/me/connections reports for a public connection:
+        # ARN-less read-only on the AWS S3 endpoint
+        assert make_public_connection().is_public
+        # an ARN-less read-only grant on a non-AWS endpoint is a RustFS grant,
+        # not public — the API shapes are identical, the endpoint discriminates
+        assert not make_connection(
+            role_arn=None, access_level="read-only", s3_endpoint="https://rustfs.internal:9000"
+        ).is_public
+        # a stored level above read-only is never public (corrupt row)
+        assert not make_connection(role_arn=None, access_level="admin").is_public
+        assert not make_connection().is_public
+        assert not make_connection(role_arn=None, access_level=None).is_public
 
 
 class TestWriteProfile:
@@ -161,17 +184,24 @@ class TestWriteProfile:
         assert section["endpoint_url"] == "https://rustfs.internal:9000"
         assert section["web_identity_token_file"] == str(token_file)
 
-    def test_aws_endpoint_never_gets_a_synthesized_role_arn(self, tmp_path, monkeypatch):
-        """Fail closed: an AWS-S3 row without a role ARN must not be minted."""
-        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
-        connection = make_connection(role_arn=None)
+    def test_public_connection_profile_would_be_inert(self, tmp_path, monkeypatch):
+        """If a public connection ever reached the writer, no mint would be
+        possible: the config file cannot disable signing (botocore treats the
+        profile value as a plain string, never the UNSIGNED sentinel), and an
+        empty role_arn means AssumeRoleWithWebIdentity never runs. The caller
+        gates on can_setup so this profile is never produced."""
+        config_path = tmp_path / "aws" / "config"
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", config_path)
+        connection = make_public_connection()
+        assert not connection.can_setup  # the caller's gate
 
         profile = write_profile(connection, Path("/tmp/t"))
 
         parser = configparser.RawConfigParser()
-        parser.read(tmp_path / "aws" / "config")
+        parser.read(config_path)
         section = parser[f"profile {profile}"]
-        assert section["role_arn"] == ""  # no placeholder — the caller gates on has_grant
+        assert section["role_arn"] == ""  # empty — never a placeholder, never mintable
+        assert "signature_version" not in section
         assert "endpoint_url" not in section
 
     def test_upsert_replaces_only_our_fields(self, tmp_path, monkeypatch):

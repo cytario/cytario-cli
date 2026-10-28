@@ -336,6 +336,8 @@ def connections_list(
     for connection in connections:
         if not connection.has_grant:
             grant = "no applicable grant"
+        elif connection.is_public:
+            grant = f"{connection.access_level} (public — anonymous reads)"
         elif connection.role_arn:
             grant = f"{connection.access_level} ({connection.role_arn})"
         else:
@@ -345,11 +347,16 @@ def connections_list(
         )
 
 
-def _usable_connections(host: str | None, setup_all: bool, name: str | None) -> tuple[list[Connection], str]:
+def _usable_connections(
+    host: str | None, setup_all: bool, name: str | None
+) -> tuple[list[Connection], str, bool]:
     """Load signed-in state and resolve the selected usable connections.
 
     Shared selection semantics of `connections setup` and `rclone setup`:
     every connection with an applicable grant, or the one matching `name`.
+    The third element reports whether the selection contains a public
+    (credential-less) connection — `connections setup` cannot serve one and
+    says so; `rclone setup` handles it with an anonymous remote.
     """
     state = _load_state()
     resolved_host = _resolve_host(host) if host else state.host
@@ -365,7 +372,7 @@ def _usable_connections(host: str | None, setup_all: bool, name: str | None) -> 
         typer.secho("No connections are visible to you on this host.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    usable = [connection for connection in connections if connection.can_setup]
+    usable = [connection for connection in connections if connection.has_grant]
     if not usable:
         typer.secho(
             "Connections are visible, but none has a grant applicable to you — "
@@ -382,7 +389,7 @@ def _usable_connections(host: str | None, setup_all: bool, name: str | None) -> 
     elif not setup_all:
         typer.echo("No connection selected; use --all or pass a connection name.")
         raise typer.Exit(code=2)
-    return usable, id_token
+    return usable, id_token, any(connection.is_public for connection in usable)
 
 
 @connections_app.command("setup")
@@ -394,13 +401,27 @@ def connections_setup(
     host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
 ) -> None:
     """Write an AWS CLI profile (web_identity_token_file) for each connection."""
-    usable, id_token = _usable_connections(host, setup_all, name)
+    usable, id_token, has_public = _usable_connections(host, setup_all, name)
 
-    for connection in usable:
+    if has_public:
+        typer.secho(
+            "Public (credential-less) connections are skipped here — an AWS profile cannot "
+            "express anonymous reads. Use `cytario rclone setup` for them.",
+            fg=typer.colors.YELLOW,
+        )
+
+    settable = [connection for connection in usable if connection.can_setup]
+    for connection in settable:
         token_file = write_token_file(connection.slug, id_token)
         profile = write_profile(connection, token_file)
         typer.secho(
             f"{connection.name}: profile {profile!r} ready (token {token_file}).", fg=typer.colors.GREEN
+        )
+    if not settable:
+        typer.secho(
+            "No connection had an AWS profile to write — `cytario rclone setup` covers "
+            "public (credential-less) connections.",
+            fg=typer.colors.YELLOW,
         )
 
 
@@ -413,26 +434,42 @@ def rclone_setup(
     host: Annotated[str | None, typer.Option(help="Cytario host")] = None,
 ) -> None:
     """Write an rclone remote per connection for local mounting (via the AWS profiles)."""
-    usable, id_token = _usable_connections(host, setup_all, name)
+    usable, id_token, _ = _usable_connections(host, setup_all, name)
 
     config_path = rclone_config_path()
     for connection in usable:
-        # The remote authenticates through this AWS profile; keep it current.
-        token_file = write_token_file(connection.slug, id_token)
-        profile = write_profile(connection, token_file)
-        try:
-            remote = write_remote(connection)
-        except RcloneError as error:
+        if connection.is_public:
+            # Anonymous remote: nothing to federate, no profile to keep current.
+            try:
+                remote = write_remote(connection)
+            except RcloneError as error:
+                typer.secho(
+                    f"{connection.name}: could not write rclone remote — {error}",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1) from error
             typer.secho(
-                f"{connection.name}: could not write rclone remote — {error}",
-                fg=typer.colors.RED,
+                f"{connection.name}: rclone remote {remote!r} ready (anonymous — public connection)"
+                + (f" (config {config_path})" if config_path else ""),
+                fg=typer.colors.GREEN,
             )
-            raise typer.Exit(code=1) from error
-        typer.secho(
-            f"{connection.name}: rclone remote {remote!r} ready via profile {profile!r}"
-            + (f" (config {config_path})" if config_path else ""),
-            fg=typer.colors.GREEN,
-        )
+        else:
+            # The remote authenticates through this AWS profile; keep it current.
+            token_file = write_token_file(connection.slug, id_token)
+            profile = write_profile(connection, token_file)
+            try:
+                remote = write_remote(connection)
+            except RcloneError as error:
+                typer.secho(
+                    f"{connection.name}: could not write rclone remote — {error}",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1) from error
+            typer.secho(
+                f"{connection.name}: rclone remote {remote!r} ready via profile {profile!r}"
+                + (f" (config {config_path})" if config_path else ""),
+                fg=typer.colors.GREEN,
+            )
         typer.echo("  mount: " + " ".join(suggested_mount_command(connection)))
         if sys.platform != "win32":
             mountpoint = Path.home() / "mnt" / connection.slug
