@@ -20,13 +20,18 @@ with connection data using the workstation's standard AWS tooling.
   `endpoint_url` (federation and data calls both go to the provider's own
   S3-compatible endpoint) and a placeholder `role_arn` — RustFS has no role
   ARNs; the entitlement is your Cytario grant, mapped from the OIDC token.
+  Public (credential-less) connections are skipped — no profile can express
+  anonymous reads; `rclone setup` covers them.
 - **`cytario rclone setup [--all | <name>]`** — writes one rclone remote per
   connection (`[cytario-<name>]`, `env_auth = true` + `profile`, no
   credentials stored) into the rclone config, refreshing the AWS profile it
   federates through, and prints a ready-to-run mount command for your OS —
   so the bucket can be mounted locally with `rclone mount`/`nfsmount` and
   browsed as a local folder (Linux/macOS) or drive letter (Windows, needs
-  WinFsp).
+  WinFsp). A public (credential-less) connection gets an anonymous remote
+  instead (blank credentials, rclone's documented public-bucket shape):
+  listing and copying work, uploading is impossible — matching the
+  read-only grant.
 - **`cytario auth status [--json]`** — the signed-in host, user (Keycloak
   `sub`, email, name), and token state; `--json` emits it machine-readable
   (agents need the `sub` to address per-user files such as

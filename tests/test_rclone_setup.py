@@ -173,18 +173,112 @@ class TestRcloneSetup:
         assert (tmp_path / "tokens" / "demo" / "id_token").read_text() == state.id_token
 
     @respx.mock
-    def test_aws_row_without_role_arn_exits_1(self, tmp_path, monkeypatch, capsys):
-        """Fail closed: an AWS-S3 grant with a null role ARN is never set up."""
-        self.make_state(tmp_path, monkeypatch).save()
-        self.stub_rclone(monkeypatch, tmp_path)
+    def test_public_connection_gets_an_anonymous_remote(self, tmp_path, monkeypatch, capsys):
+        """A public (credential-less) connection writes an anonymous remote —
+        no token file, no AWS profile, rclone's blank-credential shape."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        seen = self.stub_rclone(monkeypatch, tmp_path)
         payload = connection_payload()
-        payload["connections"][0]["roleArn"] = None  # accessLevel stays set
+        payload["connections"][0].update({"roleArn": None, "accessLevel": "read-only"})
         respx.get(f"{HOST}/api/me/connections").respond(json=payload)
 
-        with pytest.raises(typer.Exit) as exit_info:
-            cli.rclone_setup(setup_all=True, name=None, host=None)
-        assert exit_info.value.exit_code == 1
-        assert "none has a grant applicable" in capsys.readouterr().out
+        cli.rclone_setup(setup_all=True, name=None, host=None)
+
+        output = capsys.readouterr().out
+        assert "Demo: rclone remote 'cytario-demo' ready (anonymous — public connection)" in output
+        assert seen["argv"] == [
+            [
+                "rclone",
+                "config",
+                "create",
+                "cytario-demo",
+                "s3",
+                "provider=AWS",
+            ]
+        ]
+        # nothing to federate: no AWS profile and no token file are written
+        assert not (tmp_path / "aws" / "config").exists()
+        assert not (tmp_path / "tokens" / "demo").exists()
+
+    @respx.mock
+    def test_public_connection_on_s3_compatible_backend_takes_the_rustfs_path(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A null-ARN read-only grant on a non-AWS endpoint is indistinguishable
+        from a RustFS grant — the wire shapes are identical — so it keeps the
+        working RustFS path (placeholder-ARN profile + federating remote)
+        rather than degrading to anonymous."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        seen = self.stub_rclone(monkeypatch, tmp_path)
+        payload = connection_payload()
+        payload["connections"][0].update(
+            {
+                "roleArn": None,
+                "accessLevel": "read-only",
+                "s3Endpoint": "https://mirror.example.org",
+                "stsEndpoint": "https://mirror.example.org",
+            }
+        )
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.rclone_setup(setup_all=True, name=None, host=None)
+
+        output = capsys.readouterr().out
+        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert seen["argv"] == [
+            [
+                "rclone",
+                "config",
+                "create",
+                "cytario-demo",
+                "s3",
+                "env_auth=true",
+                "profile=cytario-demo",
+                "region=eu-central-1",
+                "provider=Other",
+                "endpoint=https://mirror.example.org",
+                "force_path_style=true",
+            ]
+        ]
+        aws_config = (tmp_path / "aws" / "config").read_text()
+        assert "role_arn = arn:aws:iam:::role/cytario-rustfs" in aws_config
+
+    @respx.mock
+    def test_mixed_setup_all_writes_both_shapes(self, tmp_path, monkeypatch, capsys):
+        """--all over a public + a private connection writes each its own shape."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        seen = self.stub_rclone(monkeypatch, tmp_path)
+        payload = connection_payload()
+        payload["connections"].append(
+            {
+                "id": "c2",
+                "name": "Public Data",
+                "bucketName": "open-bucket",
+                "prefix": "",
+                "region": "us-east-1",
+                "s3Endpoint": "https://s3.us-east-1.amazonaws.com",
+                "stsEndpoint": "https://sts.us-east-1.amazonaws.com",
+                "roleArn": None,
+                "accessLevel": "read-only",
+            }
+        )
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.rclone_setup(setup_all=True, name=None, host=None)
+
+        output = capsys.readouterr().out
+        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert (
+            "Public Data: rclone remote 'cytario-public-data' ready (anonymous — public connection)" in output
+        )
+        create_args = [argv for argv in seen["argv"] if argv[:3] == ["rclone", "config", "create"]]
+        assert [argv[3] for argv in create_args] == ["cytario-demo", "cytario-public-data"]
+        aws_config = (tmp_path / "aws" / "config").read_text()
+        assert "[profile cytario-demo]" in aws_config
+        assert "[profile cytario-public-data]" not in aws_config
 
     @respx.mock
     def test_unknown_name_exits_1(self, tmp_path, monkeypatch, capsys):

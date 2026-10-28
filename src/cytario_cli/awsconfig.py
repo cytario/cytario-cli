@@ -6,12 +6,14 @@ standard AWS tooling at the connection's storage role via
 itself. ARN-less providers (RustFS) get a placeholder ``role_arn`` (botocore
 requires the field present; the provider ignores it — entitlement comes from
 the OIDC token) plus ``endpoint_url`` so federation and data calls both hit
-the provider's own S3-compatible endpoint. Only profile blocks the CLI
-itself created are ever replaced; the rest of the file (user profiles,
-comments, formatting) is preserved through ConfigUpdater's round-trip
-editing. ConfigUpdater is kept non-strict so a damaged file (duplicate
-sections left by older releases) still loads — the validation step then
-reports it instead of silently rewriting.
+the provider's own S3-compatible endpoint. Public (credential-less)
+connections get no profile at all — a config file cannot disable signing, and
+the CLI never writes static keys — so they are the caller's skip with a
+note. Only profile blocks the CLI itself created are ever replaced; the rest
+of the file (user profiles, comments, formatting) is preserved through
+ConfigUpdater's round-trip editing. ConfigUpdater is kept non-strict so a
+damaged file (duplicate sections left by older releases) still loads — the
+validation step then reports it instead of silently rewriting.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ MANAGED_COMMENT = "managed by cytario-cli"
 # profile — botocore refuses to run the web-identity flow without one, while
 # the provider never reads the field (entitlement comes from the OIDC token).
 PLACEHOLDER_ROLE_ARN = "arn:aws:iam:::role/cytario-rustfs"
+# The platform synthesizes exactly this grant for a public (credential-less)
+# connection: read-only with a null role ARN, regardless of the stored level.
+PUBLIC_ACCESS_LEVEL = "read-only"
 
 
 @dataclass
@@ -79,13 +84,35 @@ class Connection:
         return bool(self.role_arn or self.access_level)
 
     @property
+    def is_public(self) -> bool:
+        """Whether the connection is public (credential-less and read-only).
+
+        The platform resolves a public connection's grant to read-only with a
+        null role ARN — the bucket's own public-read policy is the entire
+        entitlement. The API shape is identical to an ARN-less RustFS grant,
+        so the endpoint is the discriminator: an AWS-shaped endpoint with a
+        null-ARN read-only grant can only be the public provider (RustFS
+        always serves its own S3-compatible endpoint, and any ARN-less AWS
+        row would be a corrupt mint).
+        """
+        return (
+            not self.role_arn
+            and self.access_level == PUBLIC_ACCESS_LEVEL
+            and _is_aws_endpoint(self.s3_endpoint)
+        )
+
+    @property
     def can_setup(self) -> bool:
-        """Whether a working profile can be written for the connection.
+        """Whether a working AWS profile can be written for the connection.
 
         An AWS S3 grant needs its role ARN (fail closed, mirroring the
         platform's own AWS mint); an ARN-less grant is only usable on a
-        non-AWS endpoint, where the provider never reads the field.
+        non-AWS endpoint, where the provider never reads the field. A public
+        connection is never settable: no profile can express unsigned reads,
+        so `rclone setup` is its local-access path instead.
         """
+        if self.is_public:
+            return False
         if self.role_arn:
             return True
         return bool(self.access_level) and not _is_aws_endpoint(self.s3_endpoint)

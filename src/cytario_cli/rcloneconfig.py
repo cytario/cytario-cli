@@ -6,9 +6,11 @@ the connection can be mounted locally with ``rclone mount``/``nfsmount``. The
 remote stores no credentials: ``env_auth = true`` + ``profile = cytario-<slug>``
 routes authentication through the AWS CLI profile ``connections setup`` wrote
 (web_identity_token_file), so rclone federates per operation exactly like the
-AWS tooling. Remotes are upserted through rclone itself, which preserves every
-other remote in the file byte-for-byte; the prefixed name keeps user-managed
-remotes safe.
+AWS tooling. A public (credential-less) connection gets an anonymous remote
+instead — blank credentials, rclone's documented public-bucket shape — since
+there is no grant for anything to federate through. Remotes are upserted
+through rclone itself, which preserves every other remote in the file
+byte-for-byte; the prefixed name keeps user-managed remotes safe.
 """
 
 from __future__ import annotations
@@ -43,6 +45,11 @@ def remote_options(connection: Connection) -> list[tuple[str, str]]:
     The backend type itself is a positional argument to `rclone config
     create` and is deliberately not among the pairs.
     """
+    if connection.is_public:
+        # rclone's documented anonymous shape: blank credentials, no env_auth,
+        # no profile — listing and copying work, uploading is impossible (which
+        # matches the grant). is_public already pins the endpoint to AWS S3.
+        return [("provider", "AWS")]
     options: list[tuple[str, str]] = [
         ("env_auth", "true"),
         ("profile", profile_name(connection)),
@@ -116,7 +123,6 @@ def suggested_mount_command(connection: Connection) -> list[str]:
     """Return a ready-to-run mount command for the detected platform."""
     remote = remote_name(connection)
     root = remote_root(connection)
-    profile = profile_name(connection)
     read_only = connection.access_level == READ_ONLY_ACCESS_LEVEL
     windows = sys.platform == "win32"
 
@@ -137,6 +143,7 @@ def suggested_mount_command(connection: Connection) -> list[str]:
     command.append("--daemon")
     if sys.platform == "darwin":
         command.extend(["--daemon-wait", "15"])
-    # The profile the remote federates through, for orientation.
-    command.append(f"#  (AWS profile: {profile})")
+    if not connection.is_public:
+        # The profile the remote federates through, for orientation.
+        command.append(f"#  (AWS profile: {profile_name(connection)})")
     return command
