@@ -13,7 +13,7 @@ with connection data using the workstation's standard AWS tooling.
 - **`cytario connections list [--json]`** — the connections visible to you,
   with the storage role and access level your grant resolves to.
 - **`cytario connections setup [--all | <name>]`** — writes one AWS CLI profile
-  per connection into `~/.aws/config` (`[profile cytario-<name>]`) with
+  per connection into `~/.aws/config` (`[profile cytario-<org>-<name>]`) with
   `web_identity_token_file`, so `aws` / boto3 / pandas perform
   `AssumeRoleWithWebIdentity` themselves — with exactly your grant's
   authorization, never wider. RustFS-backed connections additionally get
@@ -21,9 +21,12 @@ with connection data using the workstation's standard AWS tooling.
   S3-compatible endpoint) and a placeholder `role_arn` — RustFS has no role
   ARNs; the entitlement is your Cytario grant, mapped from the OIDC token.
   Public (credential-less) connections are skipped — no profile can express
-  anonymous reads; `rclone setup` covers them.
+  anonymous reads; `rclone setup` covers them. Connections are listed
+  across all your organizations; the org qualifier in the profile name keeps
+  same-named connections from different orgs distinct (single-org setups
+  are unaffected).
 - **`cytario rclone setup [--all | <name>]`** — writes one rclone remote per
-  connection (`[cytario-<name>]`, `env_auth = true` + `profile`, no
+  connection (`[cytario-<org>-<name>]`, `env_auth = true` + `profile`, no
   credentials stored) into the rclone config, refreshing the AWS profile it
   federates through, and prints a ready-to-run mount command for your OS —
   so the bucket can be mounted locally with `rclone mount`/`nfsmount` and
@@ -93,9 +96,9 @@ cytario connections list
 cytario connections setup --all
 cytario rclone setup --all
 cytario image describe s3://mybucket/prefix/slide.ome.tif
-aws s3 ls --profile cytario-mybucket
+aws s3 ls --profile cytario-<org>-<slug>
 # mount a connection locally (command printed by `cytario rclone setup`):
-rclone mount cytario-mybucket:mybucket ~/mnt/mybucket --vfs-cache-mode writes --daemon
+rclone mount cytario-<org>-<slug>:<bucket> ~/mnt/<org>-<slug> --vfs-cache-mode writes --daemon
 ```
 
 Host resolution order: `--host`, then `CYTARIO_HOST`, then the last

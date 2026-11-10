@@ -33,8 +33,11 @@ workstation's standard AWS tooling — never with the user's browser credentials
    `name`. You need that `sub` before touching any `settings.*.json` sidecar
    (see "View settings" below).
 2. **Discover the data:** `cytario connections list --json` returns every
-   connection visible to the user with bucket, prefix, region, endpoints, and the
-   user's access level (`read-only`, `annotate`, `read-write`, `admin`).
+   connection visible to the user **across all their organizations**, each row
+   carrying its `organization` plus bucket, prefix, region, endpoints, and the
+   user's access level (`read-only`, `annotate`, `read-write`, `admin`). Two
+   organizations can carry same-named connections; the `organization` field
+   (and the `<org>/<name>` prefix in the text listing) tells them apart.
 3. **Read image metadata and contrast limits:**
    `cytario image describe s3://<bucket>/<key>` prints an image's dimensions,
    pixel type, level count, channel keys/names/fluors/colors, and the
@@ -54,22 +57,24 @@ workstation's standard AWS tooling — never with the user's browser credentials
    to stderr, so the redirected file is pure JSON.
 4. **Configure AWS profiles:** `cytario connections setup --all` (or with a
    connection name) writes one AWS CLI profile per connection
-   (`~/.aws/config`, `[profile cytario-<name>]`) plus token files under
-   `~/.aws/cytario/`. Standard tooling then does the federation itself.
+   (`~/.aws/config`, `[profile cytario-<org>-<name>]`) plus token files under
+   `~/.aws/cytario/`. Standard tooling then does the federation itself. The
+   organization qualifier keeps same-named connections from different orgs
+   distinct; a single-org setup names profiles exactly as before.
 5. **Mount a connection locally (optional):** `cytario rclone setup --all`
-   writes one rclone remote per connection (`[cytario-<name>]`, `type = s3`,
-   `env_auth = true`, `profile = cytario-<name>`) into the rclone config —
+   writes one rclone remote per connection (`[cytario-<org>-<name>]`, `type = s3`,
+   `env_auth = true`, `profile = cytario-<org>-<name>`) into the rclone config —
    no credentials stored, the remote federates through the AWS profile from
    step 4, and the command refreshes that profile/token file as part of the
    run. It then prints a ready-to-run `mount:` command; see
    "Mounting with rclone" below for the OS-specific details and flags before
    running or suggesting it.
 6. **Work with the data** via the generated profiles:
-   - `aws --profile cytario-<name> s3 ls s3://<bucket>/<prefix>`
-   - `aws --profile cytario-<name> s3 cp ...` (small sidecars and metadata
+   - `aws --profile cytario-<org>-<name> s3 ls s3://<bucket>/<prefix>`
+   - `aws --profile cytario-<org>-<name> s3 cp ...` (small sidecars and metadata
      only — results Parquet/GeoParquet is often in the **GB range**; never
      download it without explicit user approval, see the Rules)
-   - boto3: `boto3.session.Session(profile_name="cytario-<name>")`
+   - boto3: `boto3.session.Session(profile_name="cytario-<org>-<name>")`
    - Parquet/GeoParquet (results, overlays): the pattern is **script-first** —
      write a Python script that uses DuckDB against the `s3://` URI on the
      profile session (or a DuckDB MCP server if available) to run the whole
@@ -329,7 +334,7 @@ install inside that venv only.
 `cytario rclone setup --all` (or with a connection name) writes an rclone
 remote per connection so the whole bucket prefix can be mounted as a local
 filesystem. The remote stores **no credentials**: `env_auth = true` +
-`profile = cytario-<name>` makes rclone federate through the AWS CLI profile
+`profile = cytario-<org>-<name>` makes rclone federate through the AWS CLI profile
 (`web_identity_token_file`), exactly like `aws s3` does — per operation, with
 exactly the user's grant. The setup command prints a ready-to-run mount
 command for the detected platform; the OS differences below matter.
@@ -373,7 +378,7 @@ differs:
   revoked, re-login).
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment silently
   override the named profile — unset them for the mount process.
-- Remote names are `cytario-<connection-name>`; the mount root is
+- Remote names are `cytario-<org>-<connection-name>`; the mount root is
   `<remote>:<bucket>/<prefix>`. `rclone listremotes` shows what's configured.
 - Re-running `cytario rclone setup` refreshes both the AWS profile and the
   remote in one pass, so an expired or hand-edited config self-heals on the
@@ -462,8 +467,11 @@ boto3) to *work*.
   directory listings; when listing a bucket for the user, note them as
   Cytario-managed companions, not content. Only edit them when the user asks.
 - Prefer `connections list --json` (machine-readable) over parsing table output.
-- Name-locality: profiles are `cytario-<connection-name>`; token files
-  `~/.aws/cytario/<connection-name>/id_token`; rclone remotes
-  `cytario-<connection-name>` (see "Mounting with rclone").
+- Name-locality: profiles are `cytario-<org>-<connection-name>`; token files
+  `~/.aws/cytario/<org>-<connection-name>/id_token`; rclone remotes
+  `cytario-<org>-<connection-name>` (see "Mounting with rclone"). The
+  organization qualifier keeps same-named connections from different orgs
+  from colliding; take the exact name from `connections setup` / `rclone
+  setup` output or `connections list --json` rather than guessing.
 - If `auth token`/`connections list` returns "rejected", the grant was revoked
   or expired — ask the user to sign in again; do not retry in a loop.

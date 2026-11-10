@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import json
 import time
 
@@ -30,6 +31,7 @@ def connection_payload() -> dict:
         "connections": [
             {
                 "id": "c1",
+                "organization": "acme",
                 "name": "Demo",
                 "bucketName": "demo-bucket",
                 "prefix": "studies/",
@@ -73,10 +75,10 @@ class TestConnectionsSetup:
         cli.connections_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: profile 'cytario-demo' ready" in output
+        assert "Demo: profile 'cytario-acme-demo' ready" in output
         aws_config = (tmp_path / "aws" / "config").read_text()
-        assert "[profile cytario-demo]" in aws_config
-        assert (tmp_path / "tokens" / "demo" / "id_token").read_text() == state.id_token
+        assert "[profile cytario-acme-demo]" in aws_config
+        assert (tmp_path / "tokens" / "acme-demo" / "id_token").read_text() == state.id_token
 
     @respx.mock
     def test_public_connection_is_skipped_with_a_note(self, tmp_path, monkeypatch, capsys):
@@ -127,10 +129,44 @@ class TestConnectionsSetup:
 
         output = capsys.readouterr().out
         assert "Public (credential-less) connections are skipped here" in output
-        assert "Demo: profile 'cytario-demo' ready" in output
+        assert "Demo: profile 'cytario-acme-demo' ready" in output
         aws_config = (tmp_path / "aws" / "config").read_text()
-        assert "[profile cytario-demo]" in aws_config
-        assert "[profile cytario-public-data]" not in aws_config
+        assert "[profile cytario-acme-demo]" in aws_config
+        assert "[profile cytario-acme-public-data]" not in aws_config
+
+    @respx.mock
+    def test_same_name_in_two_organizations_gets_distinct_profiles(self, tmp_path, monkeypatch, capsys):
+        """The multi-org endpoint can return same-named connections from
+        different organizations — the org-qualified slug keeps the profiles
+        and token files distinct."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        payload = connection_payload()
+        second = dict(payload["connections"][0])
+        second.update(
+            {
+                "id": "c2",
+                "organization": "globex",
+                "roleArn": "arn:aws:iam::456:role/cytario/provider-roles/ro",
+                "accessLevel": "read-only",
+            }
+        )
+        payload["connections"].append(second)
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.connections_setup(setup_all=True, name=None, host=None)
+
+        output = capsys.readouterr().out
+        assert "Demo: profile 'cytario-acme-demo' ready" in output
+        assert "Demo: profile 'cytario-globex-demo' ready" in output
+        aws_config = (tmp_path / "aws" / "config").read_text()
+        assert "[profile cytario-acme-demo]" in aws_config
+        assert "[profile cytario-globex-demo]" in aws_config
+        parser = configparser.RawConfigParser(strict=True)
+        parser.read(tmp_path / "aws" / "config")
+        assert len(parser.sections()) == 2
+        assert (tmp_path / "tokens" / "acme-demo" / "id_token").exists()
+        assert (tmp_path / "tokens" / "globex-demo" / "id_token").exists()
 
 
 class TestConnectionsList:
@@ -160,8 +196,32 @@ class TestConnectionsList:
         cli.connections_list(host=None, as_json=False)
 
         output = capsys.readouterr().out
-        assert "Demo" in output
+        assert "acme/Demo" in output
         assert "public — anonymous reads" in output
+
+    @respx.mock
+    def test_two_organizations_distinguish_same_named_connections(self, tmp_path, monkeypatch, capsys):
+        """The text listing prefixes the org so same-named connections from
+        different organizations are told apart."""
+        self.make_state(tmp_path, monkeypatch).save()
+        payload = connection_payload()
+        second = dict(payload["connections"][0])
+        second.update(
+            {
+                "id": "c2",
+                "organization": "globex",
+                "roleArn": "arn:aws:iam::456:role/cytario/provider-roles/ro",
+                "accessLevel": "read-only",
+            }
+        )
+        payload["connections"].append(second)
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.connections_list(host=None, as_json=False)
+
+        output = capsys.readouterr().out
+        assert "acme/Demo" in output
+        assert "globex/Demo" in output
 
     @respx.mock
     def test_public_connection_json_carries_null_arn(self, tmp_path, monkeypatch, capsys):
@@ -175,3 +235,13 @@ class TestConnectionsList:
         rows = json.loads(capsys.readouterr().out)
         assert rows[0]["roleArn"] is None
         assert rows[0]["accessLevel"] == "read-only"
+
+    @respx.mock
+    def test_json_carries_the_organization(self, tmp_path, monkeypatch, capsys):
+        self.make_state(tmp_path, monkeypatch).save()
+        respx.get(f"{HOST}/api/me/connections").respond(json=connection_payload())
+
+        cli.connections_list(host=None, as_json=True)
+
+        rows = json.loads(capsys.readouterr().out)
+        assert rows[0]["organization"] == "acme"

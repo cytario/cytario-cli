@@ -52,6 +52,7 @@ class Connection:
     role_arn: str | None
     access_level: str | None
     id: str | None = None
+    organization: str = ""
 
     @classmethod
     def from_api(cls, payload: dict) -> Connection:
@@ -59,6 +60,7 @@ class Connection:
         return cls(
             name=payload["name"],
             id=payload.get("id"),
+            organization=payload.get("organization", ""),
             bucket_name=payload["bucketName"],
             prefix=payload.get("prefix", ""),
             region=payload["region"],
@@ -70,9 +72,16 @@ class Connection:
 
     @property
     def slug(self) -> str:
-        """Profile-safe lowercase slug of the connection name."""
-        slug = re.sub(r"[^a-z0-9-]+", "-", self.name.lower()).strip("-")
-        return slug or "connection"
+        """Profile-safe slug of the organization and connection name.
+
+        The endpoint lists connections across every organization of the
+        token, and two organizations can carry the same connection name —
+        the org prefix keeps profiles, token files, remotes, and
+        mountpoints from colliding. Rows from a pre-multi-org deployment
+        carry no organization and slug exactly as before.
+        """
+        parts = [part for part in (_slugify(self.organization), _slugify(self.name)) if part]
+        return "-".join(parts) or "connection"
 
     @property
     def has_grant(self) -> bool:
@@ -116,6 +125,10 @@ class Connection:
         if self.role_arn:
             return True
         return bool(self.access_level) and not _is_aws_endpoint(self.s3_endpoint)
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
 
 
 def profile_name(connection: Connection) -> str:

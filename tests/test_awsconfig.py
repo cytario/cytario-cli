@@ -53,10 +53,50 @@ class TestConnection:
         )
         assert connection.slug == "demo"
         assert connection.role_arn == "arn:aws:iam::1:role/x"
+        assert connection.organization == ""  # pre-multi-org rows slug unchanged
+
+    def test_from_api_parses_organization(self):
+        connection = Connection.from_api(
+            {
+                "organization": "acme",
+                "name": "Demo",
+                "bucketName": "demo-bucket",
+                "prefix": "studies/",
+                "region": "us-east-1",
+                "s3Endpoint": "https://s3.amazonaws.com",
+                "stsEndpoint": "https://sts.amazonaws.com",
+                "roleArn": "arn:aws:iam::1:role/x",
+                "accessLevel": "admin",
+            }
+        )
+        assert connection.organization == "acme"
+        assert connection.slug == "acme-demo"
+        assert profile_name(connection) == "cytario-acme-demo"
 
     def test_slug_sanitizes_names(self):
         assert make_connection(name="Lab Data 2024!").slug == "lab-data-2024"
         assert profile_name(make_connection(name="Lab Data 2024!")) == "cytario-lab-data-2024"
+
+    def test_slug_qualifies_with_the_organization(self):
+        assert (
+            make_connection(organization="Acme Labs", name="Lab Data 2024!").slug == "acme-labs-lab-data-2024"
+        )
+
+    def test_same_name_in_two_organizations_never_collides(self, tmp_path, monkeypatch):
+        """Two orgs can carry the same connection name; the org-qualified
+        slug must keep the profiles, token files, and remotes distinct."""
+        monkeypatch.setattr("cytario_cli.awsconfig.AWS_CONFIG_PATH", tmp_path / "aws" / "config")
+        first = make_connection(organization="acme")
+        second = make_connection(organization="globex", role_arn="arn:aws:iam::123:role/other")
+
+        write_profile(first, Path("/tmp/a"))
+        write_profile(second, Path("/tmp/b"))
+
+        parser = configparser.RawConfigParser(strict=True)
+        parser.read(tmp_path / "aws" / "config")
+        assert parser.sections() == ["profile cytario-acme-my-bucket", "profile cytario-globex-my-bucket"]
+        assert parser["profile cytario-acme-my-bucket"]["web_identity_token_file"] == "/tmp/a"
+        assert parser["profile cytario-globex-my-bucket"]["web_identity_token_file"] == "/tmp/b"
 
     def test_has_grant_reflects_the_resolved_grant(self):
         # AWS: role ARN present

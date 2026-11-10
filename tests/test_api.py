@@ -37,6 +37,7 @@ class TestListConnections:
             json={
                 "connections": [
                     {
+                        "organization": "acme",
                         "name": "Demo",
                         "bucketName": "demo-bucket",
                         "prefix": "",
@@ -47,7 +48,8 @@ class TestListConnections:
                         "accessLevel": "read-only",
                     },
                     {
-                        "name": "NoGrant",
+                        "organization": "globex",
+                        "name": "Demo",
                         "bucketName": "other",
                         "prefix": "p/",
                         "region": "eu-central-1",
@@ -62,8 +64,10 @@ class TestListConnections:
         connections = list_connections(HOST, "token")
 
         assert len(connections) == 2
+        assert connections[0].organization == "acme"
         assert connections[0].name == "Demo"
         assert connections[0].role_arn == "arn:aws:iam::1:role/x"
+        assert connections[1].organization == "globex"
         assert connections[1].role_arn is None
         assert connections[1].prefix == "p/"
 
