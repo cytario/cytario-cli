@@ -30,8 +30,8 @@ Usage:
   cytario connections setup --all
   cytario rclone setup --all
   cytario image describe s3://bucket/slide.ome.tif
-  aws s3 ls --profile cytario-mybucket
-  rclone mount cytario-mybucket:mybucket ~/mnt/mybucket --vfs-cache-mode writes --daemon
+  aws s3 ls --profile cytario-<org>-<slug>
+  rclone mount cytario-<org>-<slug>:<bucket> ~/mnt/<org>-<slug> --vfs-cache-mode writes --daemon
 """
 
 from __future__ import annotations
@@ -315,6 +315,7 @@ def connections_list(
             json_module.dumps(
                 [
                     {
+                        "organization": connection.organization or None,
                         "name": connection.name,
                         "bucketName": connection.bucket_name,
                         "prefix": connection.prefix,
@@ -342,8 +343,10 @@ def connections_list(
             grant = f"{connection.access_level} ({connection.role_arn})"
         else:
             grant = f"{connection.access_level} (role ARN not used on this provider)"
+        org = f"{connection.organization}/" if connection.organization else ""
         typer.echo(
-            f"{connection.name}  bucket={connection.bucket_name}  region={connection.region}  grant={grant}"
+            f"{org}{connection.name}  bucket={connection.bucket_name}"
+            f"  region={connection.region}  grant={grant}"
         )
 
 
@@ -564,8 +567,9 @@ def _print_connection_candidates(connections: list[Connection]) -> None:
         return
     for connection in connections:
         prefix = connection.prefix or "(none)"
+        org = f"{connection.organization}/" if connection.organization else ""
         typer.echo(
-            f"  {connection.name}  bucket={connection.bucket_name}  prefix={prefix}  "
+            f"  {org}{connection.name}  bucket={connection.bucket_name}  prefix={prefix}  "
             f"accessLevel={connection.access_level or 'n/a'}"
         )
 

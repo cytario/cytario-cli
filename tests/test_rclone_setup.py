@@ -33,6 +33,7 @@ def connection_payload() -> dict:
         "connections": [
             {
                 "id": "c1",
+                "organization": "acme",
                 "name": "Demo",
                 "bucketName": "demo-bucket",
                 "prefix": "studies/",
@@ -93,29 +94,29 @@ class TestRcloneSetup:
         cli.rclone_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert "Demo: rclone remote 'cytario-acme-demo' ready via profile 'cytario-acme-demo'" in output
         assert "rclone config create" not in output  # no argv noise
         assert seen["argv"] == [
             [
                 "rclone",
                 "config",
                 "create",
-                "cytario-demo",
+                "cytario-acme-demo",
                 "s3",
                 "env_auth=true",
-                "profile=cytario-demo",
+                "profile=cytario-acme-demo",
                 "region=eu-central-1",
                 "provider=AWS",
             ]
         ]
         # the AWS profile the remote federates through was refreshed too
         aws_config = (tmp_path / "aws" / "config").read_text()
-        assert "[profile cytario-demo]" in aws_config
+        assert "[profile cytario-acme-demo]" in aws_config
         assert "web_identity_token_file" in aws_config
-        assert (tmp_path / "tokens" / "demo" / "id_token").read_text() == state.id_token
+        assert (tmp_path / "tokens" / "acme-demo" / "id_token").read_text() == state.id_token
         # the platform-correct mount command is suggested
         assert "mount: rclone" in output
-        assert "cytario-demo:demo-bucket/studies" in output
+        assert "cytario-acme-demo:demo-bucket/studies" in output
 
     @respx.mock
     def test_no_usable_connection_exits_1(self, tmp_path, monkeypatch, capsys):
@@ -151,16 +152,16 @@ class TestRcloneSetup:
         cli.rclone_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert "Demo: rclone remote 'cytario-acme-demo' ready via profile 'cytario-acme-demo'" in output
         assert seen["argv"] == [
             [
                 "rclone",
                 "config",
                 "create",
-                "cytario-demo",
+                "cytario-acme-demo",
                 "s3",
                 "env_auth=true",
-                "profile=cytario-demo",
+                "profile=cytario-acme-demo",
                 "region=eu-central-1",
                 "provider=Other",
                 "endpoint=https://rustfs.internal:9000",
@@ -170,7 +171,7 @@ class TestRcloneSetup:
         aws_config = (tmp_path / "aws" / "config").read_text()
         assert "role_arn = arn:aws:iam:::role/cytario-rustfs" in aws_config
         assert "endpoint_url = https://rustfs.internal:9000" in aws_config
-        assert (tmp_path / "tokens" / "demo" / "id_token").read_text() == state.id_token
+        assert (tmp_path / "tokens" / "acme-demo" / "id_token").read_text() == state.id_token
 
     @respx.mock
     def test_public_connection_gets_an_anonymous_remote(self, tmp_path, monkeypatch, capsys):
@@ -186,20 +187,20 @@ class TestRcloneSetup:
         cli.rclone_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: rclone remote 'cytario-demo' ready (anonymous — public connection)" in output
+        assert "Demo: rclone remote 'cytario-acme-demo' ready (anonymous — public connection)" in output
         assert seen["argv"] == [
             [
                 "rclone",
                 "config",
                 "create",
-                "cytario-demo",
+                "cytario-acme-demo",
                 "s3",
                 "provider=AWS",
             ]
         ]
         # nothing to federate: no AWS profile and no token file are written
         assert not (tmp_path / "aws" / "config").exists()
-        assert not (tmp_path / "tokens" / "demo").exists()
+        assert not (tmp_path / "tokens" / "acme-demo").exists()
 
     @respx.mock
     def test_public_connection_on_s3_compatible_backend_takes_the_rustfs_path(
@@ -226,16 +227,16 @@ class TestRcloneSetup:
         cli.rclone_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert "Demo: rclone remote 'cytario-acme-demo' ready via profile 'cytario-acme-demo'" in output
         assert seen["argv"] == [
             [
                 "rclone",
                 "config",
                 "create",
-                "cytario-demo",
+                "cytario-acme-demo",
                 "s3",
                 "env_auth=true",
-                "profile=cytario-demo",
+                "profile=cytario-acme-demo",
                 "region=eu-central-1",
                 "provider=Other",
                 "endpoint=https://mirror.example.org",
@@ -255,6 +256,7 @@ class TestRcloneSetup:
         payload["connections"].append(
             {
                 "id": "c2",
+                "organization": "acme",
                 "name": "Public Data",
                 "bucketName": "open-bucket",
                 "prefix": "",
@@ -270,15 +272,51 @@ class TestRcloneSetup:
         cli.rclone_setup(setup_all=True, name=None, host=None)
 
         output = capsys.readouterr().out
-        assert "Demo: rclone remote 'cytario-demo' ready via profile 'cytario-demo'" in output
+        assert "Demo: rclone remote 'cytario-acme-demo' ready via profile 'cytario-acme-demo'" in output
         assert (
-            "Public Data: rclone remote 'cytario-public-data' ready (anonymous — public connection)" in output
+            "Public Data: rclone remote 'cytario-acme-public-data' ready (anonymous — public connection)"
+            in output
         )
         create_args = [argv for argv in seen["argv"] if argv[:3] == ["rclone", "config", "create"]]
-        assert [argv[3] for argv in create_args] == ["cytario-demo", "cytario-public-data"]
+        assert [argv[3] for argv in create_args] == ["cytario-acme-demo", "cytario-acme-public-data"]
         aws_config = (tmp_path / "aws" / "config").read_text()
-        assert "[profile cytario-demo]" in aws_config
-        assert "[profile cytario-public-data]" not in aws_config
+        assert "[profile cytario-acme-demo]" in aws_config
+        assert "[profile cytario-acme-public-data]" not in aws_config
+
+    @respx.mock
+    def test_same_name_in_two_organizations_gets_distinct_remotes(self, tmp_path, monkeypatch, capsys):
+        """Two orgs can carry the same connection name — the org-qualified
+        remote (and the profile it federates through) stay distinct."""
+        state = self.make_state(tmp_path, monkeypatch)
+        state.save()
+        seen = self.stub_rclone(monkeypatch, tmp_path)
+        payload = connection_payload()
+        second = dict(payload["connections"][0])
+        second.update(
+            {
+                "id": "c2",
+                "organization": "globex",
+                "roleArn": "arn:aws:iam::456:role/cytario/provider-roles/ro",
+                "accessLevel": "read-only",
+            }
+        )
+        payload["connections"].append(second)
+        respx.get(f"{HOST}/api/me/connections").respond(json=payload)
+
+        cli.rclone_setup(setup_all=True, name=None, host=None)
+
+        create_args = [argv for argv in seen["argv"] if argv[:3] == ["rclone", "config", "create"]]
+        assert [argv[3] for argv in create_args] == ["cytario-acme-demo", "cytario-globex-demo"]
+        options = [dict(arg.split("=", 1) for arg in argv[5:]) for argv in create_args]
+        assert [option["profile"] for option in options] == [
+            "cytario-acme-demo",
+            "cytario-globex-demo",
+        ]
+        aws_config = (tmp_path / "aws" / "config").read_text()
+        assert "[profile cytario-acme-demo]" in aws_config
+        assert "[profile cytario-globex-demo]" in aws_config
+        assert (tmp_path / "tokens" / "acme-demo" / "id_token").exists()
+        assert (tmp_path / "tokens" / "globex-demo" / "id_token").exists()
 
     @respx.mock
     def test_unknown_name_exits_1(self, tmp_path, monkeypatch, capsys):
