@@ -45,7 +45,11 @@ with connection data using the workstation's standard AWS tooling.
   session and receives the result on a loopback redirect. Requires a
   cytario-web deployment that ships the route.
 - **`cytario auth token` / `cytario auth refresh`** — a fresh ID token on
-  stdout, and a rewrite of all managed token files (tokens live ~1 hour).
+  stdout, and a rewrite of all managed token files. Tokens are short-lived
+  (300 s in the shipped deployments), so `auth refresh` is what keeps the AWS
+  token files ahead of expiry; a cached token is reused until it is close to
+  expiry and concurrent invocations share one refresh rather than racing the
+  single-use grant.
 
 Agents: see the packaged skill file ([`src/cytario_cli/skills/cytario-cli.md`](src/cytario_cli/skills/cytario-cli.md))
 for the tool-neutral agent workflow shipped with this repo — what Cytario is,

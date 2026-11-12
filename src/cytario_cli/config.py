@@ -11,8 +11,20 @@ from __future__ import annotations
 import json
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO, TYPE_CHECKING
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 CLIENT_ID = "cytario-cli"
 SCOPE = "openid profile organization"
@@ -70,6 +82,43 @@ class CliState:
     def delete(self) -> None:
         """Remove the persisted state (signed-out / dead grant)."""
         STATE_FILE.unlink(missing_ok=True)
+
+
+def _lock(handle: IO[str]) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    handle.seek(0)
+    handle.write(" ")
+    handle.flush()
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def _unlock(handle: IO[str]) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def refresh_lock() -> Iterator[None]:
+    """Serialise token refreshes across processes.
+
+    The identity service rotates the refresh grant on use and rejects a
+    replayed one, so concurrent invocations must not redeem the same grant.
+    """
+    lock_path = STATE_FILE.parent / "refresh.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as handle:
+        lock_path.chmod(FILE_MODE)
+        _lock(handle)
+        try:
+            yield
+        finally:
+            _unlock(handle)
 
 
 def write_token_file(profile_slug: str, id_token: str) -> Path:
