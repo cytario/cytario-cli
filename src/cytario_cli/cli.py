@@ -48,7 +48,7 @@ import typer
 from . import __version__
 from .api import ApiError, list_connections, serves_cytario_api
 from .awsconfig import Connection, write_profile
-from .config import CliState, write_token_file
+from .config import CliState, refresh_lock, write_token_file
 from .imagedescribe import (
     MIN_AGENT_DESCRIBE_WEB,
     describe_flow,
@@ -127,18 +127,61 @@ def _load_state() -> CliState:
     return state
 
 
-def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
-    """Return an ID token with at least min_validity seconds left, refreshing as needed."""
-    if state.id_token and id_token_expiry(state.id_token) - time.time() > min_validity:
+# A cached token is reused while it is this far from expiry — the margin one
+# command needs to finish its work. The identity service's tokens live only a
+# few minutes, so a larger margin would make every invocation refresh.
+REFRESH_MARGIN_SECONDS = 60.0
+
+
+def _fresh_id_token(state: CliState, min_validity: float = REFRESH_MARGIN_SECONDS) -> str:
+    """Return an ID token with at least min_validity seconds left, refreshing as needed.
+
+    The identity service issues short-lived tokens and rotates the refresh
+    grant on every use, rejecting a replayed one, so the cached token is
+    reused until it is close to expiry and refreshes are serialised across
+    invocations.
+    """
+    expiry = id_token_expiry(state.id_token) if state.id_token else 0.0
+    if _has_validity(expiry, min_validity):
         return state.id_token
+    with refresh_lock():
+        _adopt_persisted_tokens(state)
+        expiry = id_token_expiry(state.id_token) if state.id_token else 0.0
+        if not _has_validity(expiry, min_validity):
+            _refresh_tokens(state)
+    return state.id_token
+
+
+def _has_validity(expiry: float, min_validity: float) -> bool:
+    return expiry - time.time() > min_validity
+
+
+def _adopt_persisted_tokens(state: CliState) -> None:
+    """Pick up tokens another invocation may have rotated on disk."""
+    persisted = CliState.load()
+    if persisted:
+        state.__dict__.update(persisted.__dict__)
+
+
+def _refresh_tokens(state: CliState) -> None:
+    """Redeem the refresh grant under the lock and persist the rotation."""
+    presented_grant = state.refresh_token
     typer.secho(
         "Refreshing tokens...",
         err=True,
         fg=typer.colors.YELLOW,
     )
     try:
-        tokens = refresh_token(state.token_endpoint, state.refresh_token)
+        tokens = refresh_token(state.token_endpoint, presented_grant)
     except RefreshGrantError:
+        # A grant the identity service has already rotated is not a sign-out:
+        # another invocation (or another consumer of the same session) may have
+        # redeemed it and persisted the successor.
+        _adopt_persisted_tokens(state)
+        if state.refresh_token != presented_grant and _has_validity(
+            id_token_expiry(state.id_token) if state.id_token else 0.0, 0.0
+        ):
+            return
         state.delete()
         typer.secho(
             "Your saved sign-in is no longer valid. "
@@ -146,8 +189,12 @@ def _fresh_id_token(state: CliState, min_validity: float = 300.0) -> str:
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=2) from None
+    except OidcError as error:
+        # Transient (network, identity-service fault): keep the state so the
+        # next invocation can retry.
+        typer.secho(f"Could not refresh tokens: {error}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from None
     _store_refreshed_tokens(state, tokens)
-    return state.id_token
 
 
 def _store_refreshed_tokens(state: CliState, tokens: dict[str, str]) -> None:
@@ -161,17 +208,21 @@ def _store_refreshed_tokens(state: CliState, tokens: dict[str, str]) -> None:
     state.save()
 
 
-def _fresh_access_token(state: CliState, min_validity: float = 300.0) -> str:
+def _fresh_access_token(state: CliState, min_validity: float = REFRESH_MARGIN_SECONDS) -> str:
     """Return an access token with at least min_validity seconds left, refreshing as needed.
 
     The my-connections endpoint authenticates with and forwards this token:
     the portal catalog lookups exchange it (RFC 8693) to resolve the org —
     the ID token is not exchangable.
     """
-    if state.access_token and state.access_token_expires_at - time.time() > min_validity:
+    if state.access_token and _has_validity(state.access_token_expires_at, min_validity):
         return state.access_token
-    # Reuse the ID-token path: it refreshes both tokens in one grant call.
-    _fresh_id_token(state)
+    # A grant call rotates both tokens, so this shares the ID-token path (and
+    # its lock) rather than redeeming the single-use grant a second time.
+    with refresh_lock():
+        _adopt_persisted_tokens(state)
+        if not (state.access_token and _has_validity(state.access_token_expires_at, min_validity)):
+            _refresh_tokens(state)
     if not state.access_token:
         typer.secho(
             "No access token available. Run `cytario auth login` to sign in again.",
