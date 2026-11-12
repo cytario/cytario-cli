@@ -92,11 +92,14 @@ workstation's standard AWS tooling — never with the user's browser credentials
      for interactive browsing. For actual data work (queries, analysis),
      still use the S3-native paths below — mounts are slower for that (see
      "Mount etiquette").
-7. **Keep tokens fresh during long work:** ID tokens live ~1 hour. The AWS CLI
-   re-reads the token file on every `AssumeRoleWithWebIdentity`, so before any
-   operation expected to outlast a token (or on `ExpiredToken` errors) run
-   `cytario auth refresh` to rewrite all token files from a fresh ID token.
-   This applies to long-running mounts too — see "Mounting with rclone".
+7. **Keep tokens fresh during long work:** ID tokens are short-lived — a few
+   minutes (300 s by default), not an hour. The AWS CLI re-reads the token
+   file on every `AssumeRoleWithWebIdentity`, so before any operation expected
+   to outlast a token (or on `ExpiredToken` errors) run `cytario auth refresh`
+   to rewrite all token files from a fresh ID token. A refresh costs a network
+   round trip against a single-use grant, so refresh on demand rather than
+   looping it. This applies to long-running mounts too — see "Mounting with
+   rclone".
 
 ## How Cytario data is laid out in the bucket
 
@@ -372,10 +375,12 @@ differs:
 
 ### Long-running mounts
 
-- ID tokens live ~1 hour; rclone re-reads the token file when its cached
-  credentials expire, so run `cytario auth refresh` during long sessions —
-  expired-token failures on a mounted path mean refresh (and if the grant was
-  revoked, re-login).
+- ID tokens are short-lived — a few minutes (300 s by default), not an hour;
+  rclone re-reads the token file when its cached credentials expire, so run
+  `cytario auth refresh` during long sessions — expired-token failures on a
+  mounted path mean refresh (and if the grant was revoked, re-login). The ID
+  token file and the AWS session both go stale within minutes of each other,
+  so refresh right before the work that needs them.
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment silently
   override the named profile — unset them for the mount process.
 - Remote names are `cytario-<org>-<connection-name>`; the mount root is
